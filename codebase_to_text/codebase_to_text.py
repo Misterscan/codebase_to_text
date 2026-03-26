@@ -28,7 +28,7 @@ class CodebaseToText:
     """
 
     def __init__(self, input_path, output_path, output_type, verbose=False,
-                 exclude_hidden=False, exclude=None):
+                 exclude_hidden=False, exclude=None, ai_optimize=True):
         """
         Initialize CodebaseToText converter.
         
@@ -39,6 +39,7 @@ class CodebaseToText:
             verbose: Enable detailed logging (default: False)
             exclude_hidden: Exclude hidden files and directories (default: False)
             exclude: List of exclusion patterns (default: None)
+            ai_optimize: Optimize output for AI readability and compress size (default: True)
         """
         self.input_path = input_path
         self.output_path = output_path
@@ -46,6 +47,7 @@ class CodebaseToText:
         self.config = {
             'verbose': verbose,
             'exclude_hidden': exclude_hidden,
+            'ai_optimize': ai_optimize,
         }
         self.temp_folder_path = None
 
@@ -103,6 +105,14 @@ class CodebaseToText:
             'build/', 'dist/',
             '*.egg-info/',
         }
+        if self.config.get('ai_optimize', False):
+            media_excludes = {
+                '*.png', '*.jpg', '*.jpeg', '*.gif', '*.bmp', '*.tiff', '*.ico', '*.webp',
+                '*.mp3', '*.mp4', '*.wav', '*.avi', '*.mov', '*.flv', '*.wmv', '*.webm', '*.ogg',
+                '*.pdf', '*.eot', '*.ttf', '*.woff', '*.woff2'
+            }
+            default_excludes.update(media_excludes)
+            
         self.exclude_patterns.update(default_excludes)
     def _add_file_patterns(self):
         """Load patterns from a .exclude file if present."""
@@ -359,10 +369,30 @@ class CodebaseToText:
         except (OSError, UnicodeDecodeError) as e:
             return self._format_file_error(file_path, path, e)
 
+    def _optimize_for_ai(self, content):
+        lines = content.splitlines()
+        cleaned = []
+        comment_prefixes = ('//', '#', '/*', '*', '<!--', '-->')
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith(comment_prefixes):
+                continue
+            cleaned.append(line)
+        return '\n'.join(cleaned)
+
     def _format_file_content(self, file_path, path):
         """Format successful file content for output"""
         file_content = self._get_file_contents(file_path)
         rel_path = os.path.relpath(file_path, path)
+
+        if self.config.get('ai_optimize', False):
+            file_content = self._optimize_for_ai(file_content)
+            content = f"<file path=\"{rel_path}\">\n"
+            content += f"{file_content}\n"
+            content += f"</file>\n\n"
+            return content
 
         content = f"\n\n{rel_path}\n"
         content += f"File type: {os.path.splitext(file_path)[1] or 'no extension'}\n"
@@ -403,8 +433,11 @@ class CodebaseToText:
         delimiter = "-" * 50
 
         # Format the final text
-        final_text = (f"{folder_structure_header}\n{delimiter}\n{folder_structure}\n\n"
-                      f"{file_contents_header}\n{delimiter}\n{file_contents}")
+        if self.config.get('ai_optimize', False):
+            final_text = f"<folder_structure>\n{folder_structure}</folder_structure>\n\n<file_contents>\n{file_contents}</file_contents>"
+        else:
+            final_text = (f"{folder_structure_header}\n{delimiter}\n{folder_structure}\n\n"
+                          f"{file_contents_header}\n{delimiter}\n{file_contents}")
 
         return final_text
 
@@ -507,6 +540,8 @@ Examples:
                        action="store_true")
     parser.add_argument("--verbose", help="Show detailed processing information",
                        action="store_true")
+    parser.add_argument("--no_ai_optimize", help="Disable AI optimization (formatting, removing comments/empty lines)",
+                       action="store_true")
 
     args = parser.parse_args()
 
@@ -517,7 +552,8 @@ Examples:
             output_type=args.output_type,
             verbose=args.verbose,
             exclude_hidden=args.exclude_hidden,
-            exclude=args.exclude
+            exclude=args.exclude,
+            ai_optimize=not args.no_ai_optimize
         )
 
         code_to_text.get_file()
