@@ -12,6 +12,8 @@ import shutil
 import fnmatch
 import tempfile
 import sys
+import base64
+import io
 
 import git
 from docx import Document
@@ -56,7 +58,7 @@ class CodebaseToText:
         self.excluded_files_count = 0
 
         # Add supported image extensions
-        self.image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'}
+        self.image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.webp'}
 
         # Load exclusion patterns from various sources
         self._load_exclusion_patterns(exclude)
@@ -96,7 +98,8 @@ class CodebaseToText:
             '.git/', '.git/**',
             '__pycache__/', '**/__pycache__/**',
             '*.pyc', '*.pyo', '*.pyd',
-            '.venv/', 'venv/', 'env/',
+            '.venv/', 'venv/', 'env/', '.env/',
+            '.env.local',
             'node_modules/',
             '.DS_Store',
             '*.log', '*.tmp',
@@ -104,10 +107,11 @@ class CodebaseToText:
             '.coverage',
             'build/', 'dist/',
             '*.egg-info/',
+            '.vscode/', '*-lock.json', '*-lock.yaml',
+            '.mypy_cache/'
         }
         if self.config.get('ai_optimize', False):
             media_excludes = {
-                '*.png', '*.jpg', '*.jpeg', '*.gif', '*.bmp', '*.tiff', '*.ico', '*.webp',
                 '*.mp3', '*.mp4', '*.wav', '*.avi', '*.mov', '*.flv', '*.wmv', '*.webm', '*.ogg',
                 '*.pdf', '*.eot', '*.ttf', '*.woff', '*.woff2'
             }
@@ -349,6 +353,36 @@ class CodebaseToText:
         """Check if the file is an image based on extension"""
         return os.path.splitext(file_path)[1].lower() in self.image_extensions
 
+    def _compress_image(self, file_path, max_size=(1024, 1024), quality=70):
+        """Resize and compress image for smaller blob size"""
+        try:
+            from PIL import Image
+            with Image.open(file_path) as img:
+                # Convert to RGB if necessary for JPEG compatibility
+                if img.mode in ("RGBA", "P"):
+                    # Create a white background for transparent images
+                    background = Image.new("RGB", img.size, (255, 255, 255))
+                    if img.mode == "RGBA":
+                        background.paste(img, mask=img.split()[3])
+                    else:
+                        background.paste(img)
+                    img = background
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+
+                # Resize if larger than max_size while maintaining aspect ratio
+                if img.width > max_size[0] or img.height > max_size[1]:
+                    img.thumbnail(max_size, Image.Resampling.LANCZOS)
+
+                output = io.BytesIO()
+                # Save as JPEG with specified quality
+                img.save(output, format="JPEG", quality=quality, optimize=True)
+                return output.getvalue(), "image/jpeg"
+        except Exception as e:
+            if self.verbose:
+                print(f"Compression failed for {file_path}: {e}")
+            return None, None
+
     def _process_single_file(self, file, root, path):
         """Process a single file and return its content or None if excluded"""
         file_path = os.path.join(root, file)
@@ -365,6 +399,26 @@ class CodebaseToText:
             if self.output_type == 'docx' and self._is_image_file(file_path):
                 # For images in docx mode, return special marker with evaluated path
                 return f"\n\n(IMAGE_MARKER){os.path.abspath(file_path)}(/IMAGE_MARKER)\n"
+
+            if self.config.get('ai_optimize', False) and self._is_image_file(file_path):
+                try:
+                    rel_path = os.path.relpath(file_path, path)
+                    # Attempt to compress the image
+                    blob_bytes, mime_type = self._compress_image(file_path)
+
+                    if blob_bytes:
+                        blob = base64.b64encode(blob_bytes).decode('utf-8')
+                        return f'<image path="{rel_path}" type="{mime_type}" compressed="true">\n{blob}\n</image>\n\n'
+                    else:
+                        # Fallback to original encoding if compression fails
+                        with open(file_path, 'rb') as img_file:
+                            blob = base64.b64encode(img_file.read()).decode('utf-8')
+                        ext = os.path.splitext(file_path)[1].lower().replace('.', '')
+                        if ext == 'jpg': ext = 'jpeg'
+                        return f'<image path="{rel_path}" type="image/{ext}">\n{blob}\n</image>\n\n'
+                except Exception as e:
+                    return f"[Error: Could not convert image to blob - {str(e)}]\n"
+
             return self._format_file_content(file_path, path)
         except (OSError, UnicodeDecodeError) as e:
             return self._format_file_error(file_path, path, e)
