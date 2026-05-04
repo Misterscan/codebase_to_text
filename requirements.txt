@@ -1,3 +1,5 @@
 python-docx>=0.8.11
 gitpython
 Pillow
+pathspec>=0.11.0
+tiktoken>=0.5.0

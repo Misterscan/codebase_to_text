@@ -7,7 +7,10 @@ setup(
     packages=find_packages(),
     install_requires=[
         "python-docx>=0.8.11",  # Specify minimum version for image support
-        "gitpython"
+        "gitpython",
+        "pathspec>=0.11.0",
+        "tiktoken>=0.5.0",
+        "Pillow"
     ],
     entry_points={
         "console_scripts": [

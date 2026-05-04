@@ -5,10 +5,13 @@ A powerful Python tool that converts codebases (folder structures with files) in
 ## ✨ Features
 
 - **Multi-source input**: Local directories and GitHub repositories
-- **Flexible output**: Text files (.txt) and Microsoft Word documents (.docx)
-- **Smart exclusions**: Advanced pattern matching for files and directories
-- **Performance optimized**: Efficient traversal of large codebases
-- **Comprehensive logging**: Detailed verbose mode for transparency
+- **Flexible output**: Text files (.txt), Markdown (.md), and Microsoft Word documents (.docx)
+- **AI Optimized Output**: Formatting and compression designed explicitly for LLM contexts (enabled by default)
+- **Token Estimation**: Automatically calculates rough token counts string size using `tiktoken` to ensure your prompt fits into context windows.
+- **Image Support**: Automatically embeds codebase images into Word documents or Base64 encodes them for text output
+- **Smart exclusions**: Automatically respects local `.gitignore` files, along with advanced pattern matching for files and directories
+- **Performance optimized**: Multithreaded file reading allows incredibly fast traversal of large codebases
+- **Comprehensive logging**: Detailed verbose mode for log transparency
 - **Encoding support**: Handles various file encodings gracefully
 
 ## 🚀 Installation
@@ -27,19 +30,19 @@ pip install codebase-to-text
 codebase-to-text --input "path_or_github_url" --output "output_path" --output_type "txt"
 ```
 
-#### Advanced Usage with Exclusions
+#### Advanced Usage with Exclusions and Settings
 
 ```bash
 # Exclude specific patterns
-codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --exclude "*.log,temp/,**/__pycache__/**"
+codebase-to-text --input "./my_project" --output "output.md" --output_type "md" --exclude "*.log,temp/,**/__pycache__/**"
 
-# Multiple exclude arguments
-codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --exclude "*.pyc" --exclude "build/" --exclude "venv/"
+# Disable AI Optimization (keeps empty lines, raw formats)
+codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --no_ai_optimize
 
-# Exclude hidden files
-codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --exclude_hidden
+# Strip Comments
+codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --strip_comments
 
-# Verbose mode for detailed logging
+# Verbose logging output
 codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --verbose
 ```
 
@@ -52,17 +55,19 @@ from codebase_to_text import CodebaseToText
 converter = CodebaseToText(
     input_path="path_or_github_url",
     output_path="output_path",
-    output_type="txt"
+    output_type="md"
 )
 converter.get_file()
 
-# Advanced usage with exclusions
+# Advanced usage with exclusions and AI optimization
 converter = CodebaseToText(
     input_path="./my_project",
-    output_path="./output.txt",
-    output_type="txt",
+    output_path="./output.md",
+    output_type="md",
     exclude=["*.log", "temp/", "**/__pycache__/**"],
     exclude_hidden=True,
+    ai_optimize=True,  # Defaults to True. Set to False to retain raw whitespace formats
+    strip_comments=False, # Defaults to False. Set to True to remove all prefixed comments
     verbose=True
 )
 converter.get_file()
@@ -86,9 +91,10 @@ The tool supports powerful exclusion patterns to filter out unwanted files and d
 
 ### Exclusion Sources
 
-1. **CLI Arguments**: Use `--exclude` flag (can be used multiple times)
-2. **`.exclude` file**: Place in your project root (see example below)
-3. **Default patterns**: Common files/folders are excluded automatically
+1. **`.gitignore`**: The tool automatically attempts to read `.gitignore` at the root path and applies its rules.
+2. **CLI Arguments**: Use `--exclude` flag (can be used multiple times)
+3. **`.exclude` file**: Place in your project root (see example below)
+4. **Default patterns**: Common files/folders are excluded automatically
 
 ### Default Exclusions
 
@@ -98,6 +104,8 @@ The tool automatically excludes common development files:
 - `node_modules/`, `.venv/`, `venv/`, `env/`
 - `*.log`, `*.tmp`, `.DS_Store`
 - `.pytest_cache/`, `build/`, `dist/`
+
+When `ai_optimize` is enabled (default), various media and binary files (`*.mp3`, `*.pdf`, `*.ttf`, etc.) are also automatically excluded to keep outputs clean.
 
 ## 📝 .exclude File Example
 
