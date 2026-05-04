@@ -2,7 +2,7 @@
 Codebase to Text Converter
 
 This module provides functionality to convert codebases (folder structures with files)
-into a single text file or Microsoft Word document (.docx), while preserving folder
+into a single text file, markdown file (.md), or Microsoft Word document (.docx), while preserving folder
 structure and file contents. It supports advanced exclusion patterns and GitHub repositories.
 """
 
@@ -79,7 +79,7 @@ class CodebaseToText:
         self.gitignore_spec: Optional[pathspec.PathSpec] = None
 
         # Add supported image extensions
-        self.image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.webp'}
+        self.image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.webp', '.icns', '.svg'}
 
         # Load exclusion patterns from various sources
         self._load_exclusion_patterns(exclude)

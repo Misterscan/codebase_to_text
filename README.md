@@ -37,7 +37,7 @@ codebase-to-text --input "path_or_github_url" --output "output_path" --output_ty
 codebase-to-text --input "./my_project" --output "output.md" --output_type "md" --exclude "*.log,temp/,**/__pycache__/**"
 
 # Disable AI Optimization (keeps empty lines, raw formats)
-codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --no_ai_optimize
+codebase-to-text --input "./my_project" --output "output.docx" --output_type "docx" --no_ai_optimize
 
 # Strip Comments
 codebase-to-text --input "./my_project" --output "output.txt" --output_type "txt" --strip_comments
@@ -146,6 +146,8 @@ data/large_files/
 | `--output_type` | Output format (`txt` or `docx`) | `txt` |
 | `--exclude` | Exclusion patterns (repeatable) | `--exclude "*.log" --exclude "temp/"` |
 | `--exclude_hidden` | Exclude hidden files/folders | Flag (no value) |
+| `--no_ai_optimize` | Disable AI-optimized output | Flag (no value) |
+| `--strip_comments` | Strip comments from code | Flag (no value) |
 | `--verbose` | Enable detailed logging | Flag (no value) |
 
 ## 💡 Examples
@@ -154,7 +156,7 @@ data/large_files/
 
 ```bash
 # Basic conversion
-codebase-to-text --input "~/projects/my_app" --output "my_app_code.txt" --output_type "txt"
+codebase-to-text --input "~/projects/my_app" --output "my_app_code.md" --output_type "md"
 
 # With custom exclusions
 codebase-to-text --input "~/projects/my_app" --output "my_app_code.txt" --output_type "txt" --exclude "*.log,build/,dist/" --verbose
@@ -182,6 +184,8 @@ def analyze_codebase(project_path):
         output_path="analysis.txt",
         output_type="txt",
         exclude=["*.log", "test/", "**/__pycache__/**"],
+        ai_optimize=True,
+        strip_comments=False,
         verbose=True
     )
     
