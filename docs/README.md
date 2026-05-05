@@ -55,7 +55,7 @@ You can run the web application locally to access a graphical user interface (GU
 python app.py
 ```
 
-* **Graphical Web UI**: Open [http://127.0.0.1:5000](http://127.0.0.1:5000) to use the beautifully styled Catppuccin web interface. Just paste your codebase path/URL, set your options, and download your converted file!
+* **Graphical Web UI**: Open [http://127.0.0.1:5000](http://127.0.0.1:5000) to use the beautifully styled Catppuccin web interface. Just paste your codebase path/URL, set your options, and download your converted file! Once your download completes, you'll see a new **Ask AI for a Code Review** section with pre-configured, comprehensive review prompts tailored for models like ChatGPT, Claude, Gemini, DeepSeek, Mistral, Perplexity, Grok, Meta AI, HuggingChat, and Poe.
 * **Swagger API Docs**: Open [http://127.0.0.1:5000/apidocs/](http://127.0.0.1:5000/apidocs/) to view the interactive API playground.
 
 ### Command Line Interface (CLI)

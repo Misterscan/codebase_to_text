@@ -166,6 +166,251 @@
                     <span id="tokenCountBadge" class="badge" style="background-color: var(--ctp-lavender); color: var(--ctp-crust); font-size: 1.1em; margin-top: 10px;"></span>
                 </div>
             </div>
+
+            <div id="aiReviewSection" class="mt-4 d-none text-start">
+                <h5 class="mb-3 text-center">Ask AI for a Code Review</h5>
+                
+                <ul class="nav nav-pills mb-3 justify-content-center flex-wrap gap-2" id="pills-tab" role="tablist">
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="pills-chatgpt-tab" data-bs-toggle="pill" data-bs-target="#pills-chatgpt" type="button" role="tab" style="color: #10a37f; font-weight: bold;">ChatGPT</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-claude-tab" data-bs-toggle="pill" data-bs-target="#pills-claude" type="button" role="tab" style="color: #d97757; font-weight: bold;">Claude</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-gemini-tab" data-bs-toggle="pill" data-bs-target="#pills-gemini" type="button" role="tab" style="color: #8ab4f8; font-weight: bold;">Gemini</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-deepseek-tab" data-bs-toggle="pill" data-bs-target="#pills-deepseek" type="button" role="tab" style="color: #4d6bfe; font-weight: bold;">DeepSeek</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-mistral-tab" data-bs-toggle="pill" data-bs-target="#pills-mistral" type="button" role="tab" style="color: #f54e42; font-weight: bold;">Mistral</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-perplexity-tab" data-bs-toggle="pill" data-bs-target="#pills-perplexity" type="button" role="tab" style="color: #22b8cd; font-weight: bold;">Perplexity</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-grok-tab" data-bs-toggle="pill" data-bs-target="#pills-grok" type="button" role="tab" style="color: #ffffff; font-weight: bold; background-color: #000; border: 1px solid #333;">Grok</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-meta-tab" data-bs-toggle="pill" data-bs-target="#pills-meta" type="button" role="tab" style="color: #0668E1; font-weight: bold;">Meta AI</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-huggingface-tab" data-bs-toggle="pill" data-bs-target="#pills-huggingface" type="button" role="tab" style="color: #FFD21E; font-weight: bold; text-shadow: 1px 1px 2px #000;">HuggingChat</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-poe-tab" data-bs-toggle="pill" data-bs-target="#pills-poe" type="button" role="tab" style="color: #7d5df6; font-weight: bold;">Poe</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="pills-generic-tab" data-bs-toggle="pill" data-bs-target="#pills-generic" type="button" role="tab" style="color: #aaaaaa; font-weight: bold;">Other AI</button>
+                  </li>
+                </ul>
+
+                <div class="tab-content" id="pills-tabContent">
+                  <!-- ChatGPT Prompt -->
+                  <div class="tab-pane fade show active" id="pills-chatgpt" role="tabpanel">
+                      <textarea id="aiPromptTextChatGPT" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are an elite Systems Architect and Principal Software Engineer. I am providing you with the complete source code for a project. Your task is to perform an exhaustive, multi-step codebase review using your advanced reasoning capabilities.
+
+INSTRUCTIONS:
+1. INITIAL ASSESSMENT: Briefly summarize the overall architecture, intent, and tech stack of the codebase.
+2. DEEP CODE REVIEW: Rigorously analyze the code across these critical dimensions:
+   - Architecture & Design: Identify violations of SOLID principles, tight coupling, MVC/Clean architecture deviations, and poor abstractions.
+   - Security & Resilience: Hunt for OWASP Top 10 vulnerabilities, injection flaws, insecure data handling, and lack of input sanitization.
+   - Performance & Scalability: Pinpoint algorithmic inefficiencies (Big-O issues), memory leaks, N+1 queries, and synchronous blocking operations.
+   - Code Quality & Maintainability: Highlight code smells, DRY principle violations, misleading naming conventions, and brittle logic pathways.
+3. ACTIONABLE DELIVERABLES:
+   - For every identified issue, you MUST specify the exact file name and context.
+   - Do not give vague advice. Provide a concrete, highly optimized, and robust code rewrite for every flawed section as a strictly formatted code block.
+   - End with a prioritized "Fix-It" roadmap mapping out immediate critical fixes vs. long-term technical debt reduction.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextChatGPT', this)">Copy Prompt</button>
+                          <a href="https://chatgpt.com/" target="_blank" class="btn btn-outline-success" style="color: #10a37f; border-color: #10a37f;">Open ChatGPT</a>
+                      </div>
+                  </div>
+                  <!-- Claude Prompt -->
+                  <div class="tab-pane fade" id="pills-claude" role="tabpanel">
+                      <textarea id="aiPromptTextClaude" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are a Staff-Level Software Engineer renowned for rigorous code reviews and vast context comprehension. I have attached a complete project codebase.
+
+CONDUCT A COMPREHENSIVE AUDIT FOLLOWING THIS FRAMEWORK:
+Phase 1: Architectural Integrity
+Evaluate the structural layout, module boundaries, and dependency graph. Where will this architecture fail at scale? Are there cyclic dependencies or God classes?
+
+Phase 2: Vulnerability & Robustness Analysis
+Act as a security auditor. Find edge-case exploits, race conditions, concurrency issues, swallowed exceptions, unhandled states, and insecure dependencies.
+
+Phase 3: Modernization & Optimization
+Suggest modern language features, better design patterns, and algorithmic performance boosts. Scrutinize all loops and data structure choices for suboptimal time/space complexity.
+
+OUTPUT FORMAT:
+- Use markdown tables for a high-level summary of technical debt.
+- Provide extreme deep-dives into specific files. 
+- Whenever you suggest a change, you MUST provide the exact refactored code block with detailed comments explaining the engineering improvements. Do not return abstract summaries; return functional, secure, and production-ready code.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextClaude', this)">Copy Prompt</button>
+                          <a href="https://claude.ai/" target="_blank" class="btn btn-outline-warning" style="color: #d97757; border-color: #d97757;">Open Claude</a>
+                      </div>
+                  </div>
+                  <!-- Gemini Prompt -->
+                  <div class="tab-pane fade" id="pills-gemini" role="tabpanel">
+                      <textarea id="aiPromptTextGemini" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are an Expert Lead Developer with an exceptional ability to process massive codebase contexts. I am supplying my entire project's source code in the attached file.
+
+REQUIREMENTS FOR COMPREHENSIVE REVIEW:
+1. Holistic Architecture Review: How do the components interact? Trace the data flow and suggest decoupling strategies or architectural paradigm shifts if needed.
+2. Deep Pattern Analysis: Scan the entire dataset for anti-patterns, duplicated "spaghetti" code, and violations of idiomatic language standards.
+3. Security & Performance Profiling: Identify resource-intensive bottlenecks, redundant database queries/API calls, and security gaps affecting data integrity.
+4. Logic Verification: Verify core algorithms for state mutation errors and unhandled null/undefined values.
+5. Refactoring Roadmap: Provide a prioritized, step-by-step roadmap to eliminate technical debt.
+
+For every major critique, write out the exact optimized code implementation. Do not skip details. Rely on your deep context window to track variables and state deeply across multiple files, and point out cross-file inconsistencies.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextGemini', this)">Copy Prompt</button>
+                          <a href="https://gemini.google.com/" target="_blank" class="btn btn-outline-info" style="color: #8ab4f8; border-color: #8ab4f8;">Open Gemini</a>
+                      </div>
+                  </div>
+                  <!-- DeepSeek Prompt -->
+                  <div class="tab-pane fade" id="pills-deepseek" role="tabpanel">
+                      <textarea id="aiPromptTextDeepseek" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are DeepSeek, an AI optimized for advanced algorithmic reasoning, logic mapping, and pristine software engineering. Here is my complete codebase.
+
+EXECUTE A METICULOUS, EXPERT-LEVEL REVIEW:
+Step 1: Algorithmic Efficiency. Scrutinize all loops, recursion, data structure choices, and logic paths for suboptimal Big-O time/space complexity.
+Step 2: Structural Soundness. Assess the modularity, separation of concerns, and typing strictness. 
+Step 3: Bug Detection. Leverage your coding reasoning to find deep, hidden bugs, memory leaks, race conditions, and unhandled edge cases.
+Step 4: Dependency & Security Audit. Highlight vectors for attack or problematic integrations.
+
+OUTPUT RULES:
+- Be highly technical and brutally honest.
+- For every vulnerability, inefficiency, or structural flaw you find, output a perfectly formatted, production-grade refactored code snippet. 
+- Explain exactly WHY your updated approach is mathematically, computationally, and logically superior to the original.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextDeepseek', this)">Copy Prompt</button>
+                          <a href="https://chat.deepseek.com/" target="_blank" class="btn btn-outline-primary" style="color: #4d6bfe; border-color: #4d6bfe;">Open DeepSeek</a>
+                      </div>
+                  </div>
+                  <!-- Mistral Prompt -->
+                  <div class="tab-pane fade" id="pills-mistral" role="tabpanel">
+                      <textarea id="aiPromptTextMistral" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are Mistral, a fast, efficient, and highly capable Principal AI Engineer. I have provided my entire software project in the attached single file.
+
+I require a direct, no-nonsense code review focused strictly on engineering excellence.
+
+FOCUS AREAS:
+1. Critical Vulnerabilities & Logic Flaws: Find anything that could cause a crash, privilege escalation, memory leak, or security breach. Check data validation boundaries.
+2. Structural Technical Debt: Identify spaghetti code, God classes, and over-engineered or missing abstractions.
+3. Performance Bottlenecks: Point out inefficient I/O, poor asynchronous handling, heavy synchronous blocking, or unoptimized database usage.
+4. Idiomatic Alignment: Ensure the syntax and functions used are strictly modern and native to the language's best practices.
+
+DELIVERABLE: 
+Skip the fluff. Give me a prioritized list of critical issues, followed immediately by the required refactored code blocks to fix them. Ensure all provided code is bulletproof and optimized.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextMistral', this)">Copy Prompt</button>
+                          <a href="https://chat.mistral.ai/" target="_blank" class="btn btn-outline-danger" style="color: #f54e42; border-color: #f54e42;">Open Le Chat</a>
+                      </div>
+                  </div>
+                  <!-- Perplexity Prompt -->
+                  <div class="tab-pane fade" id="pills-perplexity" role="tabpanel">
+                      <textarea id="aiPromptTextPerplexity" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are Perplexity, an AI assistant with deep web-enabled analytical capabilities and access to the absolute latest coding standards and CVE databases. I am giving you my full codebase in a single file context.
+
+Please review my codebase and cross-reference it with modern, best-in-class software development practices:
+1. Code standards & Modernization: Are there updated libraries, functions, or language features I should be utilizing instead? Is this code using deprecated methods?
+2. Vulnerability Assessment: Check for common CVE patterns, injection risks, SSRF, XSS, and poor authentication implementations.
+3. Architecture & Edge Cases: Does the module configuration make sense? Are there unhandled logic pathways that will break in edge scenarios?
+4. Technical Debt: Outline the top 5 actionable items I should address to reduce technical debt right now.
+
+OUTPUT:
+Provide a highly structured, heavily detailed response. Include verbatim file paths, line context, and write the exact code replacements needed to modernize and secure the project.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextPerplexity', this)">Copy Prompt</button>
+                          <a href="https://www.perplexity.ai/" target="_blank" class="btn btn-outline-info" style="color: #22b8cd; border-color: #22b8cd;">Open Perplexity</a>
+                      </div>
+                  </div>
+                  <!-- Grok Prompt -->
+                  <div class="tab-pane fade" id="pills-grok" role="tabpanel">
+                      <textarea id="aiPromptTextGrok" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are Grok, an AI created by xAI. You are witty, rebellious, and an incredibly sharp, unapologetic software engineer. I'm dumping my entire codebase in the attached file.
+
+Give me a brutally honest, highly technical, and exhaustive code review:
+1. Bugs & Inefficiencies: Roast any glaring errors, O(n^2) logic masked as O(n), memory leaks, or terrible data structure choices.
+2. Architecture & Patterns: Does the file structure make sense or is it an over-engineered mess? Point out DRY violations and tight coupling. Suggest real, scalable alternatives.
+3. Security Vectoring: Point out any obvious vectors for attack. Evaluate input sanitization and error masking.
+4. Refactoring Orders: Don't just complain—fix it.
+
+DELIVERABLE: 
+For every massive flaw you find, map out the exact file/function, explain why it's technically a disaster, and give me the exact clean, refactored code snippets needed to fix it. Be thorough.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextGrok', this)">Copy Prompt</button>
+                          <a href="https://grok.com/" target="_blank" class="btn btn-outline-light" style="color: #ffffff; border-color: #ffffff;">Open Grok</a>
+                      </div>
+                  </div>
+                  <!-- Meta AI Prompt -->
+                  <div class="tab-pane fade" id="pills-meta" role="tabpanel">
+                      <textarea id="aiPromptTextMeta" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are Meta AI (Llama), a state-of-the-art open-model AI assistant with top-tier coding capabilities. I have provided my entire software project below.
+
+Please execute a deep contextual, file-by-file review of this project:
+1. Performance Check: Identify areas where computational efficiency, memory management, or concurrency could be dramatically improved.
+2. Logic Verification: Check the core algorithms and error handling strategies for edge-case failures, unhandled promises/futures, or state mutation bugs.
+3. Architectural Integrity: Evaluate design pattern implementations. Recommend structural changes to reduce coupling and increase cohesion.
+4. Security Audit: Scan for improper auth/auth logic, injection vulnerabilities, and weak validation boundaries.
+
+OUTPUT: 
+Generate a comprehensive technical report. Use strong formatting. For the 5 most critical sections that need improvement, output the exact refactored code blocks, clearly explaining how the new design resolves the systemic issues.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextMeta', this)">Copy Prompt</button>
+                          <a href="https://www.meta.ai/" target="_blank" class="btn btn-outline-primary" style="color: #0668E1; border-color: #0668E1;">Open Meta AI</a>
+                      </div>
+                  </div>
+                  <!-- HuggingChat AIs Prompt -->
+                  <div class="tab-pane fade" id="pills-huggingface" role="tabpanel">
+                      <textarea id="aiPromptTextHF" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are a state-of-the-art open-source AI assistant on HuggingChat, equipped with advanced programming logic. Attached is my full project codebase.
+
+Read the entire file context carefully and perform an exhaustive, expert-level code review:
+1. Code Organization: Evaluate module boundaries, dependency flow, and architectural scalability.
+2. Anti-patterns & Smells: Point out any code smells, duplicated logic, or deviations from standard SOLID/clean design practices.
+3. Edge Cases & Resilience: Identify scenarios where the logic might fail, deadlock, or crash unexpectedly. Verify null/error handling states.
+4. Performance & Security: Check for sub-optimal query patterns, slow loops, memory retention issues, and insecure data handling.
+
+Actionable Deliverables: 
+Provide a prioritized list of high-impact refactorings. You must provide precise, fully refactored, and beautifully formatted code snippets to replace the problematic areas you discover.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextHF', this)">Copy Prompt</button>
+                          <a href="https://huggingface.co/chat/" target="_blank" class="btn btn-outline-warning" style="color: #FFD21E; border-color: #FFD21E;">Open HuggingChat</a>
+                      </div>
+                  </div>
+                  <!-- Poe AIs Prompt -->
+                  <div class="tab-pane fade" id="pills-poe" role="tabpanel">
+                      <textarea id="aiPromptTextPoe" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are a highly capable AI assistant on Poe. I'm providing you with the full text representation of my codebase below.
+
+Please act as a Senior Systems Architect and review this code exhaustively:
+1. Scalability & DB Operations: Tell me if the current structure will scale well under heavy load. Highlight performance bottlenecks like synchronous I/O or N+1 problems.
+2. Structural Flaws: Point out tight coupling, missing abstractions, or messy horizontal dependencies. Review the directory/domain structure.
+3. Security & Robustness: Highlight vulnerabilities (XSS, SQLi, improper bounds checking) or missing error management/logging frameworks.
+4. Typing & Syntax: Enforce rigid type checking and modern idiomatic syntax.
+
+OUTPUT TASK: 
+Deliver a highly technical review. Group by "Critical Priority" and "Optimization Suggestions". Supply optimized, secure code snippets to act as immediate drop-in replacements for the problematic parts.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextPoe', this)">Copy Prompt</button>
+                          <a href="https://poe.com/" target="_blank" class="btn btn-outline-info" style="color: #7d5df6; border-color: #7d5df6;">Open Poe</a>
+                      </div>
+                  </div>
+                  <!-- Generic AI Prompt -->
+                  <div class="tab-pane fade" id="pills-generic" role="tabpanel">
+                      <textarea id="aiPromptTextGeneric" class="form-control mb-3" rows="12" readonly style="resize: none; background-color: var(--ctp-crust); color: var(--ctp-text); border: 1px solid var(--ctp-surface1);">You are an elite Software Engineer and Systems Architect. I am providing you with the complete source code for a project. Your task is to perform an exhaustive, multi-step code review.
+
+INSTRUCTIONS:
+1. DEEP CODE REVIEW: Analyze the code across these critical dimensions:
+   - Architecture & Design: Identify violations of SOLID principles, tight coupling, and poor abstraction mapping.
+   - Security & Resilience: Hunt for vulnerabilities, insecure data handling, and lack of input sanitization.
+   - Performance & Scalability: Pinpoint algorithmic inefficiencies, memory leaks, and blocking operations.
+   - Code Quality & Clean Code: Highlight code smells, DRY principle violations, and confusing logic.
+2. ACTIONABLE DELIVERABLES:
+   - For each identified issue, specify the exact file name and logical context.
+   - Provide a concrete, highly optimized, and robust code rewrite for every flawed section. Do not give vague theoretical advice; supply production-ready implementation snippets. End with a roadmap for reducing technical debt.</textarea>
+                      <div class="d-flex justify-content-center gap-2">
+                          <button type="button" class="btn btn-secondary" style="background-color: var(--ctp-surface2); border: none; color: var(--ctp-crust); font-weight: 600;" onclick="copyAiPrompt('aiPromptTextGeneric', this)">Copy Prompt</button>
+                      </div>
+                  </div>
+                </div>
+
+                <p class="text-center text-muted mt-4" style="font-size: 0.85em;">Copy the prompt above, upload your converted file on the respective AI website, and paste the prompt to get a complete codebase review.</p>
+            </div>
         </div>
     </div>
 
@@ -222,6 +467,7 @@
                 window.URL.revokeObjectURL(downloadUrl);
                 
                 resultMsg.classList.remove('d-none');
+                document.getElementById('aiReviewSection').classList.remove('d-none');
             } catch (err) {
                 alert("Request failed: " + err.message);
             } finally {
@@ -229,6 +475,22 @@
                 loading.classList.add('d-none');
             }
         });
+
+        function copyAiPrompt(elementId, btn) {
+            const promptText = document.getElementById(elementId);
+            promptText.select();
+            promptText.setSelectionRange(0, 99999); /* For mobile devices */
+            navigator.clipboard.writeText(promptText.value).then(() => {
+                const originalText = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            }).catch(err => {
+                alert('Failed to copy prompt: ' + err);
+            });
+        }
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
