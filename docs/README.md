@@ -1,6 +1,8 @@
-# Codebase to Text Converter
+# Codebase Convert
 
 A powerful Python tool that converts codebases (folder structures with files) into a single text file or Microsoft Word document (.docx), while preserving folder structure and file contents. Perfect for AI/LLM processing, documentation generation, and code analysis.
+
+# Wanna see an example? This repo was converted to Markdown [here](./codebase-convert-2.0.0.md).
 
 ## ✨ Features
 
