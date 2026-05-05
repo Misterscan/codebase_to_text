@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_file, render_template, after_this_request
 from flasgger import Swagger
 from codebase_convert.codebase_convert import CodebaseConvert
-from codebase_convert.utils import walk_filesystem_generator
+from codebase_convert.utils.fs_utils import walk_filesystem_generator
 
 app = Flask(__name__)
 
@@ -111,7 +111,9 @@ def convert():
 
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
 
-WORKSPACE_DIR = Path(os.getcwd()).resolve()
+# Root directory for path traversal checks. 
+# We use the parent directory of the current workspace to allow users to select other local projects.
+WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
 
 def _safe_input_path(input_path: str) -> bool:
     # Allow explicit GitHub forms
@@ -119,16 +121,25 @@ def _safe_input_path(input_path: str) -> bool:
         return True
 
     parsed = urlparse(input_path)
-    # Block all other URL schemes to prevent SSRF
-    if parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
+    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
+    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
         return False
 
     try:
         target = Path(input_path)
-        if not target.is_absolute():
-            target = WORKSPACE_DIR / target
+        # On Windows, a path starting with / or \ is considered absolute but has no drive.
+        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
+        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
+            target = WORKSPACE_DIR / input_path.lstrip('/\\')
+            
         target = target.resolve()
-        return target == WORKSPACE_DIR or target.is_relative_to(WORKSPACE_DIR)
+        
+        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
+        # and drive letter variations reliably.
+        target_str = str(target).lower()
+        workspace_str = str(WORKSPACE_DIR).lower()
+        
+        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
     except Exception:
         return False
 
@@ -160,29 +171,7 @@ def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_opt
         shutil.rmtree(tmpdir, ignore_errors=True)
         return response
 
-    with CodebaseConvert(
-        input_path=input_path,
-        output_path=output_file,
-        output_type=output_type,
-        exclude=exclude,
-        exclude_hidden=exclude_hidden,
-        ai_optimize=ai_optimize,
-        strip_comments=strip_comments,
-        verbose=verbose
-    ) as converter:
-        converter.write_to(output_file)  # streaming writer
-        return send_file(
-            output_file,
-            as_attachment=True,
-            download_name=download_filename or f"codebase_output.{output_type}"
-        )
-
-    # Use a secure temp file to generate output 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_type}") as temp_out:
-        output_file = temp_out.name
-        
     try:
-        # Initialize converter
         with CodebaseConvert(
             input_path=input_path,
             output_path=output_file,
@@ -193,17 +182,17 @@ def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_opt
             strip_comments=strip_comments,
             verbose=verbose
         ) as converter:
-            # Execute the conversion
             text_output = converter.get_text()
             converter.get_file(text_output=text_output)
             
-            from codebase_convert.utils import estimate_tokens
+            from codebase_convert.utils.utils import estimate_tokens
             token_count = estimate_tokens(text_output, verbose=verbose) or 0
             
+            # Send the generated file with token count header
             response = send_file(
-                output_file, 
-                as_attachment=True, 
-                download_name=download_filename or f"codebase_output.{output_type}"
+                output_file,
+                as_attachment=True,
+                download_name=download_filename or f"output.{output_type}"
             )
             response.headers['X-Token-Count'] = str(token_count)
             response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'

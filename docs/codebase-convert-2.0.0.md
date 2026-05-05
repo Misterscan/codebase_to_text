@@ -11,13 +11,11 @@ codebase_to_text/
         codebase_convert.py
         pytest.ini
         requirements-dev.txt
-        __init__.py
         utils/
             fs_utils.py
             git_utils.py
             image_utils.py
             utils.py
-            __init__.py
     converted-repos/
     docs/
         codebase-convert-2.0.0.md
@@ -26,7 +24,6 @@ codebase_to_text/
         index.html
     tests/
         test_codebase_convert.py
-        __init__.py
 ```
 
 # File Contents
@@ -36,10 +33,13 @@ codebase_to_text/
 ```python
 import os
 import tempfile
+import shutil
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file, render_template
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request
 from flasgger import Swagger
 from codebase_convert.codebase_convert import CodebaseConvert
+from codebase_convert.utils.fs_utils import walk_filesystem_generator
 app = Flask(__name__)
 # Configure Flasgger
 swagger_config = {
@@ -135,29 +135,56 @@ def convert():
     strip_comments = data.get('strip_comments', False)
     verbose = data.get('verbose', False)
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
+# Root directory for path traversal checks. 
+# We use the parent directory of the current workspace to allow users to select other local projects.
+WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
 def _safe_input_path(input_path: str) -> bool:
+    # Allow explicit GitHub forms
     if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
         return True
+    parsed = urlparse(input_path)
+    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
+    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
+        return False
     try:
-        from urllib.parse import urlparse
-        if urlparse(input_path).scheme in ['http', 'https']:
-            return True
-        WORKSPACE_DIR = Path(os.getcwd()).resolve()
-        abs_path = Path(input_path).resolve()
-        # Check if the resolved input path starts with the resolved workspace dir
-        # We check path parts to ensure it's strictly contained
-        return str(abs_path).startswith(str(WORKSPACE_DIR))
+        target = Path(input_path)
+        # On Windows, a path starting with / or \ is considered absolute but has no drive.
+        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
+        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
+            target = WORKSPACE_DIR / input_path.lstrip('/\\')
+        target = target.resolve()
+        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
+        # and drive letter variations reliably.
+        target_str = str(target).lower()
+        workspace_str = str(WORKSPACE_DIR).lower()
+        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
     except Exception:
         return False
+def write_to(self, output_path: str) -> None:
+    repo_path = self._resolve_working_path()
+    with open(output_path, "w", encoding="utf-8") as out:
+        out.write(self._parse_folder(repo_path))
+        out.write("\n--- FILE CONTENTS ---\n\n")
+        for file, root, base in walk_filesystem_generator(
+            repo_path,
+            self._should_exclude,
+            self._handle_directory_exclusion,
+            self._filter_directories_for_processing
+        ):
+            chunk = self._process_single_file(file, root, base)
+            if chunk:
+                out.write(chunk)
 def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
     if not _safe_input_path(input_path):
-        err = "Path traversal detected or invalid path. Input must be within the designated workspace or a valid URL."
+        err = "Path traversal detected or invalid path."
         return (jsonify({"error": err}), 403) if is_json else (err, 403)
-    # Use a secure temp file to generate output 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_type}") as temp_out:
-        output_file = temp_out.name
+    tmpdir = tempfile.mkdtemp(prefix="convert_")
+    output_file = os.path.join(tmpdir, f"output.{output_type}")
+    @after_this_request
+    def cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
     try:
-        # Initialize converter
         with CodebaseConvert(
             input_path=input_path,
             output_path=output_file,
@@ -168,15 +195,15 @@ def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_opt
             strip_comments=strip_comments,
             verbose=verbose
         ) as converter:
-            # Execute the conversion
             text_output = converter.get_text()
             converter.get_file(text_output=text_output)
-            from codebase_convert.utils import estimate_tokens
+            from codebase_convert.utils.utils import estimate_tokens
             token_count = estimate_tokens(text_output, verbose=verbose) or 0
+            # Send the generated file with token count header
             response = send_file(
-                output_file, 
-                as_attachment=True, 
-                download_name=download_filename or f"codebase_output.{output_type}"
+                output_file,
+                as_attachment=True,
+                download_name=download_filename or f"output.{output_type}"
             )
             response.headers['X-Token-Count'] = str(token_count)
             response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
@@ -211,9 +238,11 @@ def form_convert():
     strip_comments = request.form.get('strip_comments') == 'on'
     download_filename = output
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
-if __name__ == '__main__':
-    # Add an explicit port mapping. Runs on http://127.0.0.1:5003 by default.
-    app.run(debug=True, host='0.0.0.0', port=5003)
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5003"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host=host, port=port)
 ```
 
 ### File: `LICENSE`
@@ -416,7 +445,6 @@ description-file = README.md
 # Modified from Qaisar Tanvir's original codebase-convert setup.py to include Pillow for image support in python-docx and updated version numbers for dependencies.
 from setuptools import setup, find_packages
 import os
-print(os.path.dirname(__file__))
 setup(
     name="codebase_convert",
     version="2.0.0",
@@ -438,7 +466,7 @@ setup(
     author="Misterscan",
     author_email="misterscanmusic@aol.com",
     description="A Python package to convert codebase to text",
-    license="MIT",
+    license="Apache-2.0",
     long_description=open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs/README.md"), "r", encoding="utf-8").read(),
     download_url="https://github.com/Misterscan/codebase_convert/releases/download/v2.0.0/codebase_convert-2.0.0.tar.gz",
     long_description_content_type="text/markdown",
@@ -476,6 +504,8 @@ import io
 import logging
 import uuid
 import abc
+from pathlib import Path
+from xml.sax.saxutils import quoteattr
 from typing import List, Optional, Set, Tuple, Any
 from codebase_convert.utils import clone_github_repo, process_files_with_strategy, is_image_file, compress_image
 class OutputFormatter(abc.ABC):
@@ -588,6 +618,8 @@ try:
 except ImportError:
     HAS_TIKTOKEN = False
 logger = logging.getLogger("codebase_convert")
+MAX_TEXT_FILE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_TEXT_FILE_BYTES", "1000000"))
+BINARY_SAMPLE_BYTES = 8192
 class CodebaseConvert:
     """
     Convert codebase to text with advanced exclusion patterns.
@@ -660,8 +692,8 @@ class CodebaseConvert:
         if not os.path.exists(gitignore_path):
             return
         try:
-            with open(gitignore_path, 'r', encoding='utf-8') as f:
-                self.gitignore_spec = pathspec.PathSpec.from_lines('gitignore', f)
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                self.gitignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
             if self.verbose:
                 logger.debug(f"Loaded gitignore patterns from {gitignore_path}")
         except Exception as e:
@@ -844,20 +876,40 @@ class CodebaseConvert:
         if self.verbose:
             logger.debug(f"The file tree to be processed:\n{tree}")
             logger.debug(f"Total excluded items: {self.excluded_files_count}")
-    def _get_file_contents(self, file_path: str) -> str:
-        """Read file contents with better error handling"""
+    def _is_within_base(self, file_path: str, base_path: str) -> bool:
         try:
-            # Try UTF-8 first
-            with open(file_path, 'r', encoding='utf-8') as file:
+            resolved_file = Path(file_path).resolve(strict=True)
+            resolved_base = Path(base_path).resolve(strict=True)
+            resolved_file.relative_to(resolved_base)
+            return True
+        except (OSError, ValueError):
+            return False
+    def _is_probably_binary(self, file_path: str) -> bool:
+        try:
+            with open(file_path, "rb") as file:
+                sample = file.read(BINARY_SAMPLE_BYTES)
+            return b"\0" in sample
+        except OSError:
+            return True
+    def _get_file_contents(self, file_path: str) -> str:
+        """Read file contents with size limits and binary detection."""
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            return f"[Error reading file metadata: {str(e)}]"
+        if file_size > MAX_TEXT_FILE_BYTES:
+            return f"[Skipped: file exceeds {MAX_TEXT_FILE_BYTES:,} bytes]"
+        if self._is_probably_binary(file_path):
+            return "[Skipped: binary file]"
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
                 return file.read()
         except UnicodeDecodeError:
             try:
-                # Fall back to latin-1 for binary-like files
-                with open(file_path, 'r', encoding='latin-1') as file:
-                    content = file.read()
-                    return f"[Binary/Non-UTF8 file - showing first 500 chars]\n{content[:500]}..."
+                with open(file_path, "r", encoding="utf-8", errors="replace") as file:
+                    return file.read()
             except OSError as e:
-                return f"[Could not read file content: {str(e)}]"
+                return f"[Error reading file: {str(e)}]"
         except OSError as e:
             return f"[Error reading file: {str(e)}]"
     def _is_hidden_file(self, file_path: str) -> bool:
@@ -903,8 +955,16 @@ class CodebaseConvert:
             if not self._should_exclude(dir_path, path):
                 dirs.append(d)
     def _process_single_file(self, file: str, root: str, path: str) -> Optional[str]:
-        """Process a single file and return its content or None if excluded"""
+        """Process a single file and return its content or None if excluded."""
         file_path = os.path.join(root, file)
+        if not self._is_within_base(file_path, path):
+            if self.verbose:
+                logger.warning(f"Skipping file outside base path: {file_path}")
+            return None
+        if os.path.islink(file_path):
+            if self.verbose:
+                logger.warning(f"Skipping symlinked file: {file_path}")
+            return None
         if self._should_exclude(file_path, path):
             if self.verbose:
                 logger.debug(f"Skipping excluded file: {file_path}")
@@ -912,26 +972,21 @@ class CodebaseConvert:
         if self.verbose:
             logger.debug(f"Processing: {file_path}")
         try:
-            if self.output_type == 'docx' and is_image_file(file_path):
-                # For images in docx mode, return special marker with evaluated path
+            if self.output_type == "docx" and is_image_file(file_path):
                 return f"\n\n{self.formatter.marker_start}{os.path.abspath(file_path)}{self.formatter.marker_end}\n"
-            if self.config.get('ai_optimize', False) and is_image_file(file_path):
-                try:
-                    rel_path = os.path.relpath(file_path, path)
-                    # Attempt to compress the image
-                    blob_bytes, mime_type = compress_image(file_path, verbose=self.verbose)
-                    if blob_bytes:
-                        blob = base64.b64encode(blob_bytes).decode('utf-8')
-                        return f'<image path="{rel_path}" type="{mime_type}" compressed="true">\n{blob}\n</image>\n\n'
-                    else:
-                        # Fallback to original encoding if compression fails
-                        with open(file_path, 'rb') as img_file:
-                            blob = base64.b64encode(img_file.read()).decode('utf-8')
-                        ext = os.path.splitext(file_path)[1].lower().replace('.', '')
-                        if ext == 'jpg': ext = 'jpeg'
-                        return f'<image path="{rel_path}" type="image/{ext}">\n{blob}\n</image>\n\n'
-                except Exception as e:
-                    return f"[Error: Could not convert image to blob - {str(e)}]\n"
+            if self.config.get("ai_optimize", False) and is_image_file(file_path):
+                rel_path = os.path.relpath(file_path, path)
+                blob_bytes, mime_type = compress_image(file_path, verbose=self.verbose)
+                if not blob_bytes or not mime_type:
+                    return f"[Skipped image: could not safely process {rel_path}]\n"
+                blob = base64.b64encode(blob_bytes).decode("utf-8")
+                return (
+                    f'<image path={quoteattr(rel_path)} '
+                    f'type={quoteattr(mime_type)} '
+                    f'compressed="true">\n'
+                    f"{blob}\n"
+                    f"</image>\n\n"
+                )
             return self._format_file_content(file_path, path)
         except (OSError, UnicodeDecodeError) as e:
             return self._format_file_error(file_path, path, e)
@@ -971,18 +1026,20 @@ class CodebaseConvert:
             logger.error(f"Error processing {file_path}: {error}")
         return self.formatter.format_file_error(file_path, base_path, error)
     def get_text(self) -> str:
-        """Generate the combined text output"""
-        folder_structure = ""
-        file_contents = ""
+        """Generate the combined text output."""
         if self.is_github_repo():
             temp_folder_path = clone_github_repo(self.input_path, self.verbose)
-            if temp_folder_path is None:
-                raise RuntimeError("Failed to create temporary folder for GitHub repository")
-            folder_structure = self._parse_folder(temp_folder_path)
-            file_contents = self._process_files(temp_folder_path)
+            try:
+                self._add_file_patterns(temp_folder_path)
+                self._load_gitignore(temp_folder_path)
+                folder_structure = self._parse_folder(temp_folder_path)
+                file_contents = self._process_files(temp_folder_path)
+            finally:
+                shutil.rmtree(temp_folder_path, ignore_errors=True)
         else:
             folder_structure = self._parse_folder(self.input_path)
             file_contents = self._process_files(self.input_path)
+        return self.formatter.combine_text(folder_structure, file_contents)
         # Section headers
         return self.formatter.combine_text(folder_structure, file_contents)
     # Estimate token method removed. Use codebase_convert.utils.estimate_tokens instead.
@@ -1065,13 +1122,6 @@ addopts = -v
 pytest
 ```
 
-### File: `codebase_convert\__init__.py`
-
-```python
-# Inside of __init__.py
-from codebase_convert.codebase_convert import CodebaseConvert
-```
-
 ### File: `codebase_convert\utils\fs_utils.py`
 
 ```python
@@ -1126,33 +1176,80 @@ def process_files_with_strategy(is_github_repo: bool, path: str, should_exclude:
 ### File: `codebase_convert\utils\git_utils.py`
 
 ```python
-import tempfile
-import logging
-import shutil
 import atexit
-import git
+import logging
 import os
-logger = logging.getLogger('codebase_convert')
+import shutil
+import subprocess
+import tempfile
+from urllib.parse import urlparse
+logger = logging.getLogger("codebase_convert")
 _temp_dirs = []
 def cleanup_temp_dirs():
-    for d in _temp_dirs:
-        if os.path.exists(d):
+    for directory in list(_temp_dirs):
+        if os.path.exists(directory):
             try:
-                shutil.rmtree(d)
-                logger.info(f'Cleaned up temporary folder on exit: {d}')
-            except Exception:
+                shutil.rmtree(directory)
+                logger.info("Cleaned up temporary folder on exit: %s", directory)
+            except OSError:
                 pass
 atexit.register(cleanup_temp_dirs)
+def _validate_github_url(repo_url: str) -> str:
+    if not isinstance(repo_url, str) or not repo_url.strip():
+        raise ValueError("Repository URL is required.")
+    repo_url = repo_url.strip()
+    if repo_url.startswith("git@github.com:"):
+        return repo_url
+    parsed = urlparse(repo_url)
+    if parsed.scheme != "https":
+        raise ValueError("Only HTTPS GitHub repository URLs are allowed.")
+    if parsed.hostname != "github.com":
+        raise ValueError("Only github.com repository URLs are allowed.")
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) < 2:
+        raise ValueError("GitHub URL must include an owner and repository name.")
+    return repo_url
 def clone_github_repo(repo_url: str, verbose: bool = False) -> str:
+    temp_dir = tempfile.mkdtemp(prefix="github_repo_")
+    _temp_dirs.append(temp_dir)
     try:
-        temp_dir = tempfile.mkdtemp(prefix='github_repo_')
-        _temp_dirs.append(temp_dir)
-        git.Repo.clone_from(repo_url, temp_dir)
+        safe_repo_url = _validate_github_url(repo_url)
+        timeout_seconds = int(os.environ.get("CODEBASE_CONVERT_GIT_TIMEOUT", "120"))
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--filter=blob:limit=2m",
+                "--single-branch",
+                safe_repo_url,
+                temp_dir,
+            ],
+            check=True,
+            timeout=timeout_seconds,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         if verbose:
-            logger.info(f"GitHub repository cloned to: {temp_dir}")
+            logger.info("GitHub repository cloned to: %s", temp_dir)
         return temp_dir
-    except Exception as e:
-        logger.error(f"Error cloning GitHub repository: {e}")
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir in _temp_dirs:
+            _temp_dirs.remove(temp_dir)
+        raise TimeoutError("GitHub clone timed out.") from e
+    except subprocess.CalledProcessError as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir in _temp_dirs:
+            _temp_dirs.remove(temp_dir)
+        stderr = e.stderr[-500:] if e.stderr else "Unknown git error."
+        raise RuntimeError(f"GitHub clone failed: {stderr}") from e
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir in _temp_dirs:
+            _temp_dirs.remove(temp_dir)
         raise
 ```
 
@@ -1160,38 +1257,64 @@ def clone_github_repo(repo_url: str, verbose: bool = False) -> str:
 
 ```python
 import io
-import os
 import logging
-from typing import Tuple, Optional
+import os
+from typing import Optional, Tuple
+from PIL import Image, ImageFile, UnidentifiedImageError
 logger = logging.getLogger("codebase_convert")
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.webp', '.icns', '.svg'}
+IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".ico",
+    ".webp",
+}
+MAX_IMAGE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_BYTES", "5000000"))
+MAX_IMAGE_PIXELS = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_PIXELS", "20000000"))
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+ImageFile.LOAD_TRUNCATED_IMAGES = False
 def is_image_file(file_path: str) -> bool:
-    """Check if the file is an image based on extension"""
+    """Check if the file is a supported raster image based on extension."""
     return os.path.splitext(file_path)[1].lower() in IMAGE_EXTENSIONS
-def compress_image(file_path: str, max_size: Tuple[int, int] = (1024, 1024), quality: int = 70, verbose: bool = False) -> Tuple[Optional[bytes], Optional[str]]:
-    """Resize and compress image for smaller blob size"""
+def compress_image(
+    file_path: str,
+    max_size: Tuple[int, int] = (1024, 1024),
+    quality: int = 70,
+    verbose: bool = False,
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """Resize and compress image for smaller blob size."""
     try:
-        from PIL import Image
+        if os.path.getsize(file_path) > MAX_IMAGE_BYTES:
+            if verbose:
+                logger.warning(f"Image too large to process safely: {file_path}")
+            return None, None
         with Image.open(file_path) as img:
-            # Convert to RGB if necessary for JPEG compatibility
-            if img.mode in ("RGBA", "P"):
-                # Create a white background for transparent images
+            img.verify()
+        with Image.open(file_path) as img:
+            img.load()
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                if verbose:
+                    logger.warning(f"Image pixel count too large to process safely: {file_path}")
+                return None, None
+            if img.mode in ("RGBA", "LA", "P"):
                 background = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode == "RGBA":
-                    background.paste(img, mask=img.split()[3])
+                if img.mode in ("RGBA", "LA"):
+                    alpha = img.getchannel("A")
+                    background.paste(img.convert("RGBA"), mask=alpha)
                 else:
-                    background.paste(img)
+                    background.paste(img.convert("RGB"))
                 img = background
             elif img.mode != "RGB":
                 img = img.convert("RGB")
-            # Resize if larger than max_size while maintaining aspect ratio
             if img.width > max_size[0] or img.height > max_size[1]:
                 img.thumbnail(max_size, Image.Resampling.LANCZOS)
             output = io.BytesIO()
-            # Save as JPEG with specified quality
             img.save(output, format="JPEG", quality=quality, optimize=True)
             return output.getvalue(), "image/jpeg"
-    except Exception as e:
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as e:
         if verbose:
             logger.warning(f"Compression failed for {file_path}: {e}")
         return None, None
@@ -1219,22 +1342,6 @@ def estimate_tokens(text: str, verbose: bool = False) -> Optional[int]:
         if verbose:
             logger.warning(f'Could not estimate tokens: {e}')
         return None
-```
-
-### File: `codebase_convert\utils\__init__.py`
-
-```python
-from .utils import estimate_tokens
-from .git_utils import clone_github_repo
-from .fs_utils import process_files_with_strategy
-from .image_utils import is_image_file, compress_image
-__all__ = [
-    'estimate_tokens',
-    'clone_github_repo',
-    'process_files_with_strategy',
-    'is_image_file',
-    'compress_image'
-]
 ```
 
 ### File: `docs\codebase-convert-2.0.0.md`
@@ -1273,10 +1380,13 @@ codebase_to_text/
 ```python
 import os
 import tempfile
+import shutil
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file, render_template
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request
 from flasgger import Swagger
 from codebase_convert.codebase_convert import CodebaseConvert
+from codebase_convert.utils.fs_utils import walk_filesystem_generator
 app = Flask(__name__)
 # Configure Flasgger
 swagger_config = {
@@ -1372,29 +1482,56 @@ def convert():
     strip_comments = data.get('strip_comments', False)
     verbose = data.get('verbose', False)
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
+# Root directory for path traversal checks. 
+# We use the parent directory of the current workspace to allow users to select other local projects.
+WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
 def _safe_input_path(input_path: str) -> bool:
+    # Allow explicit GitHub forms
     if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
         return True
+    parsed = urlparse(input_path)
+    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
+    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
+        return False
     try:
-        from urllib.parse import urlparse
-        if urlparse(input_path).scheme in ['http', 'https']:
-            return True
-        WORKSPACE_DIR = Path(os.getcwd()).resolve()
-        abs_path = Path(input_path).resolve()
-        # Check if the resolved input path starts with the resolved workspace dir
-        # We check path parts to ensure it's strictly contained
-        return str(abs_path).startswith(str(WORKSPACE_DIR))
+        target = Path(input_path)
+        # On Windows, a path starting with / or \ is considered absolute but has no drive.
+        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
+        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
+            target = WORKSPACE_DIR / input_path.lstrip('/\\')
+        target = target.resolve()
+        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
+        # and drive letter variations reliably.
+        target_str = str(target).lower()
+        workspace_str = str(WORKSPACE_DIR).lower()
+        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
     except Exception:
         return False
+def write_to(self, output_path: str) -> None:
+    repo_path = self._resolve_working_path()
+    with open(output_path, "w", encoding="utf-8") as out:
+        out.write(self._parse_folder(repo_path))
+        out.write("\n--- FILE CONTENTS ---\n\n")
+        for file, root, base in walk_filesystem_generator(
+            repo_path,
+            self._should_exclude,
+            self._handle_directory_exclusion,
+            self._filter_directories_for_processing
+        ):
+            chunk = self._process_single_file(file, root, base)
+            if chunk:
+                out.write(chunk)
 def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
     if not _safe_input_path(input_path):
-        err = "Path traversal detected or invalid path. Input must be within the designated workspace or a valid URL."
+        err = "Path traversal detected or invalid path."
         return (jsonify({"error": err}), 403) if is_json else (err, 403)
-    # Use a secure temp file to generate output 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_type}") as temp_out:
-        output_file = temp_out.name
+    tmpdir = tempfile.mkdtemp(prefix="convert_")
+    output_file = os.path.join(tmpdir, f"output.{output_type}")
+    @after_this_request
+    def cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
     try:
-        # Initialize converter
         with CodebaseConvert(
             input_path=input_path,
             output_path=output_file,
@@ -1405,15 +1542,15 @@ def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_opt
             strip_comments=strip_comments,
             verbose=verbose
         ) as converter:
-            # Execute the conversion
             text_output = converter.get_text()
             converter.get_file(text_output=text_output)
-            from codebase_convert.utils import estimate_tokens
+            from codebase_convert.utils.utils import estimate_tokens
             token_count = estimate_tokens(text_output, verbose=verbose) or 0
+            # Send the generated file with token count header
             response = send_file(
-                output_file, 
-                as_attachment=True, 
-                download_name=download_filename or f"codebase_output.{output_type}"
+                output_file,
+                as_attachment=True,
+                download_name=download_filename or f"output.{output_type}"
             )
             response.headers['X-Token-Count'] = str(token_count)
             response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
@@ -1448,9 +1585,11 @@ def form_convert():
     strip_comments = request.form.get('strip_comments') == 'on'
     download_filename = output
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
-if __name__ == '__main__':
-    # Add an explicit port mapping. Runs on http://127.0.0.1:5003 by default.
-    app.run(debug=True, host='0.0.0.0', port=5003)
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5003"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host=host, port=port)
 ```
 ### File: `LICENSE`
 ```
@@ -1645,7 +1784,6 @@ description-file = README.md
 # Modified from Qaisar Tanvir's original codebase-convert setup.py to include Pillow for image support in python-docx and updated version numbers for dependencies.
 from setuptools import setup, find_packages
 import os
-print(os.path.dirname(__file__))
 setup(
     name="codebase_convert",
     version="2.0.0",
@@ -1667,7 +1805,7 @@ setup(
     author="Misterscan",
     author_email="misterscanmusic@aol.com",
     description="A Python package to convert codebase to text",
-    license="MIT",
+    license="Apache-2.0",
     long_description=open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs/README.md"), "r", encoding="utf-8").read(),
     download_url="https://github.com/Misterscan/codebase_convert/releases/download/v2.0.0/codebase_convert-2.0.0.tar.gz",
     long_description_content_type="text/markdown",
@@ -1703,6 +1841,8 @@ import io
 import logging
 import uuid
 import abc
+from pathlib import Path
+from xml.sax.saxutils import quoteattr
 from typing import List, Optional, Set, Tuple, Any
 from codebase_convert.utils import clone_github_repo, process_files_with_strategy, is_image_file, compress_image
 class OutputFormatter(abc.ABC):
@@ -1815,6 +1955,8 @@ try:
 except ImportError:
     HAS_TIKTOKEN = False
 logger = logging.getLogger("codebase_convert")
+MAX_TEXT_FILE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_TEXT_FILE_BYTES", "1000000"))
+BINARY_SAMPLE_BYTES = 8192
 class CodebaseConvert:
     """
     Convert codebase to text with advanced exclusion patterns.
@@ -1887,8 +2029,8 @@ class CodebaseConvert:
         if not os.path.exists(gitignore_path):
             return
         try:
-            with open(gitignore_path, 'r', encoding='utf-8') as f:
-                self.gitignore_spec = pathspec.PathSpec.from_lines('gitignore', f)
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                self.gitignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
             if self.verbose:
                 logger.debug(f"Loaded gitignore patterns from {gitignore_path}")
         except Exception as e:
@@ -2071,20 +2213,40 @@ class CodebaseConvert:
         if self.verbose:
             logger.debug(f"The file tree to be processed:\n{tree}")
             logger.debug(f"Total excluded items: {self.excluded_files_count}")
-    def _get_file_contents(self, file_path: str) -> str:
-        """Read file contents with better error handling"""
+    def _is_within_base(self, file_path: str, base_path: str) -> bool:
         try:
-            # Try UTF-8 first
-            with open(file_path, 'r', encoding='utf-8') as file:
+            resolved_file = Path(file_path).resolve(strict=True)
+            resolved_base = Path(base_path).resolve(strict=True)
+            resolved_file.relative_to(resolved_base)
+            return True
+        except (OSError, ValueError):
+            return False
+    def _is_probably_binary(self, file_path: str) -> bool:
+        try:
+            with open(file_path, "rb") as file:
+                sample = file.read(BINARY_SAMPLE_BYTES)
+            return b"\0" in sample
+        except OSError:
+            return True
+    def _get_file_contents(self, file_path: str) -> str:
+        """Read file contents with size limits and binary detection."""
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            return f"[Error reading file metadata: {str(e)}]"
+        if file_size > MAX_TEXT_FILE_BYTES:
+            return f"[Skipped: file exceeds {MAX_TEXT_FILE_BYTES:,} bytes]"
+        if self._is_probably_binary(file_path):
+            return "[Skipped: binary file]"
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
                 return file.read()
         except UnicodeDecodeError:
             try:
-                # Fall back to latin-1 for binary-like files
-                with open(file_path, 'r', encoding='latin-1') as file:
-                    content = file.read()
-                    return f"[Binary/Non-UTF8 file - showing first 500 chars]\n{content[:500]}..."
+                with open(file_path, "r", encoding="utf-8", errors="replace") as file:
+                    return file.read()
             except OSError as e:
-                return f"[Could not read file content: {str(e)}]"
+                return f"[Error reading file: {str(e)}]"
         except OSError as e:
             return f"[Error reading file: {str(e)}]"
     def _is_hidden_file(self, file_path: str) -> bool:
@@ -2130,8 +2292,16 @@ class CodebaseConvert:
             if not self._should_exclude(dir_path, path):
                 dirs.append(d)
     def _process_single_file(self, file: str, root: str, path: str) -> Optional[str]:
-        """Process a single file and return its content or None if excluded"""
+        """Process a single file and return its content or None if excluded."""
         file_path = os.path.join(root, file)
+        if not self._is_within_base(file_path, path):
+            if self.verbose:
+                logger.warning(f"Skipping file outside base path: {file_path}")
+            return None
+        if os.path.islink(file_path):
+            if self.verbose:
+                logger.warning(f"Skipping symlinked file: {file_path}")
+            return None
         if self._should_exclude(file_path, path):
             if self.verbose:
                 logger.debug(f"Skipping excluded file: {file_path}")
@@ -2139,26 +2309,21 @@ class CodebaseConvert:
         if self.verbose:
             logger.debug(f"Processing: {file_path}")
         try:
-            if self.output_type == 'docx' and is_image_file(file_path):
-                # For images in docx mode, return special marker with evaluated path
+            if self.output_type == "docx" and is_image_file(file_path):
                 return f"\n\n{self.formatter.marker_start}{os.path.abspath(file_path)}{self.formatter.marker_end}\n"
-            if self.config.get('ai_optimize', False) and is_image_file(file_path):
-                try:
-                    rel_path = os.path.relpath(file_path, path)
-                    # Attempt to compress the image
-                    blob_bytes, mime_type = compress_image(file_path, verbose=self.verbose)
-                    if blob_bytes:
-                        blob = base64.b64encode(blob_bytes).decode('utf-8')
-                        return f'<image path="{rel_path}" type="{mime_type}" compressed="true">\n{blob}\n</image>\n\n'
-                    else:
-                        # Fallback to original encoding if compression fails
-                        with open(file_path, 'rb') as img_file:
-                            blob = base64.b64encode(img_file.read()).decode('utf-8')
-                        ext = os.path.splitext(file_path)[1].lower().replace('.', '')
-                        if ext == 'jpg': ext = 'jpeg'
-                        return f'<image path="{rel_path}" type="image/{ext}">\n{blob}\n</image>\n\n'
-                except Exception as e:
-                    return f"[Error: Could not convert image to blob - {str(e)}]\n"
+            if self.config.get("ai_optimize", False) and is_image_file(file_path):
+                rel_path = os.path.relpath(file_path, path)
+                blob_bytes, mime_type = compress_image(file_path, verbose=self.verbose)
+                if not blob_bytes or not mime_type:
+                    return f"[Skipped image: could not safely process {rel_path}]\n"
+                blob = base64.b64encode(blob_bytes).decode("utf-8")
+                return (
+                    f'<image path={quoteattr(rel_path)} '
+                    f'type={quoteattr(mime_type)} '
+                    f'compressed="true">\n'
+                    f"{blob}\n"
+                    f"</image>\n\n"
+                )
             return self._format_file_content(file_path, path)
         except (OSError, UnicodeDecodeError) as e:
             return self._format_file_error(file_path, path, e)
@@ -2198,18 +2363,20 @@ class CodebaseConvert:
             logger.error(f"Error processing {file_path}: {error}")
         return self.formatter.format_file_error(file_path, base_path, error)
     def get_text(self) -> str:
-        """Generate the combined text output"""
-        folder_structure = ""
-        file_contents = ""
+        """Generate the combined text output."""
         if self.is_github_repo():
             temp_folder_path = clone_github_repo(self.input_path, self.verbose)
-            if temp_folder_path is None:
-                raise RuntimeError("Failed to create temporary folder for GitHub repository")
-            folder_structure = self._parse_folder(temp_folder_path)
-            file_contents = self._process_files(temp_folder_path)
+            try:
+                self._add_file_patterns(temp_folder_path)
+                self._load_gitignore(temp_folder_path)
+                folder_structure = self._parse_folder(temp_folder_path)
+                file_contents = self._process_files(temp_folder_path)
+            finally:
+                shutil.rmtree(temp_folder_path, ignore_errors=True)
         else:
             folder_structure = self._parse_folder(self.input_path)
             file_contents = self._process_files(self.input_path)
+        return self.formatter.combine_text(folder_structure, file_contents)
         # Section headers
         return self.formatter.combine_text(folder_structure, file_contents)
     # Estimate token method removed. Use codebase_convert.utils.estimate_tokens instead.
@@ -2343,70 +2510,143 @@ def process_files_with_strategy(is_github_repo: bool, path: str, should_exclude:
 ```
 ### File: `codebase_convert\utils\git_utils.py`
 ```python
-import tempfile
-import logging
-import shutil
 import atexit
-import git
+import logging
 import os
-logger = logging.getLogger('codebase_convert')
+import shutil
+import subprocess
+import tempfile
+from urllib.parse import urlparse
+logger = logging.getLogger("codebase_convert")
 _temp_dirs = []
 def cleanup_temp_dirs():
-    for d in _temp_dirs:
-        if os.path.exists(d):
+    for directory in list(_temp_dirs):
+        if os.path.exists(directory):
             try:
-                shutil.rmtree(d)
-                logger.info(f'Cleaned up temporary folder on exit: {d}')
-            except Exception:
+                shutil.rmtree(directory)
+                logger.info("Cleaned up temporary folder on exit: %s", directory)
+            except OSError:
                 pass
 atexit.register(cleanup_temp_dirs)
+def _validate_github_url(repo_url: str) -> str:
+    if not isinstance(repo_url, str) or not repo_url.strip():
+        raise ValueError("Repository URL is required.")
+    repo_url = repo_url.strip()
+    if repo_url.startswith("git@github.com:"):
+        return repo_url
+    parsed = urlparse(repo_url)
+    if parsed.scheme != "https":
+        raise ValueError("Only HTTPS GitHub repository URLs are allowed.")
+    if parsed.hostname != "github.com":
+        raise ValueError("Only github.com repository URLs are allowed.")
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) < 2:
+        raise ValueError("GitHub URL must include an owner and repository name.")
+    return repo_url
 def clone_github_repo(repo_url: str, verbose: bool = False) -> str:
+    temp_dir = tempfile.mkdtemp(prefix="github_repo_")
+    _temp_dirs.append(temp_dir)
     try:
-        temp_dir = tempfile.mkdtemp(prefix='github_repo_')
-        _temp_dirs.append(temp_dir)
-        git.Repo.clone_from(repo_url, temp_dir)
+        safe_repo_url = _validate_github_url(repo_url)
+        timeout_seconds = int(os.environ.get("CODEBASE_CONVERT_GIT_TIMEOUT", "120"))
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--filter=blob:limit=2m",
+                "--single-branch",
+                safe_repo_url,
+                temp_dir,
+            ],
+            check=True,
+            timeout=timeout_seconds,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         if verbose:
-            logger.info(f"GitHub repository cloned to: {temp_dir}")
+            logger.info("GitHub repository cloned to: %s", temp_dir)
         return temp_dir
-    except Exception as e:
-        logger.error(f"Error cloning GitHub repository: {e}")
+    except subprocess.TimeoutExpired as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir in _temp_dirs:
+            _temp_dirs.remove(temp_dir)
+        raise TimeoutError("GitHub clone timed out.") from e
+    except subprocess.CalledProcessError as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir in _temp_dirs:
+            _temp_dirs.remove(temp_dir)
+        stderr = e.stderr[-500:] if e.stderr else "Unknown git error."
+        raise RuntimeError(f"GitHub clone failed: {stderr}") from e
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if temp_dir in _temp_dirs:
+            _temp_dirs.remove(temp_dir)
         raise
 ```
 ### File: `codebase_convert\utils\image_utils.py`
 ```python
 import io
-import os
 import logging
-from typing import Tuple, Optional
+import os
+from typing import Optional, Tuple
+from PIL import Image, ImageFile, UnidentifiedImageError
 logger = logging.getLogger("codebase_convert")
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.webp', '.icns', '.svg'}
+IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".ico",
+    ".webp",
+}
+MAX_IMAGE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_BYTES", "5000000"))
+MAX_IMAGE_PIXELS = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_PIXELS", "20000000"))
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+ImageFile.LOAD_TRUNCATED_IMAGES = False
 def is_image_file(file_path: str) -> bool:
-    """Check if the file is an image based on extension"""
+    """Check if the file is a supported raster image based on extension."""
     return os.path.splitext(file_path)[1].lower() in IMAGE_EXTENSIONS
-def compress_image(file_path: str, max_size: Tuple[int, int] = (1024, 1024), quality: int = 70, verbose: bool = False) -> Tuple[Optional[bytes], Optional[str]]:
-    """Resize and compress image for smaller blob size"""
+def compress_image(
+    file_path: str,
+    max_size: Tuple[int, int] = (1024, 1024),
+    quality: int = 70,
+    verbose: bool = False,
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """Resize and compress image for smaller blob size."""
     try:
-        from PIL import Image
+        if os.path.getsize(file_path) > MAX_IMAGE_BYTES:
+            if verbose:
+                logger.warning(f"Image too large to process safely: {file_path}")
+            return None, None
         with Image.open(file_path) as img:
-            # Convert to RGB if necessary for JPEG compatibility
-            if img.mode in ("RGBA", "P"):
-                # Create a white background for transparent images
+            img.verify()
+        with Image.open(file_path) as img:
+            img.load()
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                if verbose:
+                    logger.warning(f"Image pixel count too large to process safely: {file_path}")
+                return None, None
+            if img.mode in ("RGBA", "LA", "P"):
                 background = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode == "RGBA":
-                    background.paste(img, mask=img.split()[3])
+                if img.mode in ("RGBA", "LA"):
+                    alpha = img.getchannel("A")
+                    background.paste(img.convert("RGBA"), mask=alpha)
                 else:
-                    background.paste(img)
+                    background.paste(img.convert("RGB"))
                 img = background
             elif img.mode != "RGB":
                 img = img.convert("RGB")
-            # Resize if larger than max_size while maintaining aspect ratio
             if img.width > max_size[0] or img.height > max_size[1]:
                 img.thumbnail(max_size, Image.Resampling.LANCZOS)
             output = io.BytesIO()
-            # Save as JPEG with specified quality
             img.save(output, format="JPEG", quality=quality, optimize=True)
             return output.getvalue(), "image/jpeg"
-    except Exception as e:
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as e:
         if verbose:
             logger.warning(f"Compression failed for {file_path}: {e}")
         return None, None
@@ -4716,10 +4956,4 @@ class TestImageCompression(unittest.TestCase):
 if __name__ == "__main__":
     # Run specific test class or all tests
     unittest.main(verbosity=2)
-```
-
-### File: `tests\__init__.py`
-
-```python
-
 ```
