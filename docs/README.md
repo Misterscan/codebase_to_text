@@ -12,7 +12,7 @@ A powerful Python tool that converts codebases (folder structures with files) in
 - **Token Estimation**: Automatically calculates rough token counts string size using `tiktoken` to ensure your prompt fits into context windows.
 - **Image Support**: Automatically embeds codebase images into Word documents or Base64 encodes them for text output
 - **Smart exclusions**: Automatically respects local `.gitignore` files, along with advanced pattern matching for files and directories
-- **Performance optimized**: Multithreaded file reading allows incredibly fast traversal of large codebases
+- **Performance optimized**: Single-threaded generator traversal for local paths avoids thread overhead; multithreading is reserved for remote GitHub I/O
 - **Comprehensive logging**: Detailed verbose mode for log transparency
 - **Encoding support**: Handles various file encodings gracefully
 
@@ -55,8 +55,8 @@ You can run the web application locally to access a graphical user interface (GU
 python app.py
 ```
 
-* **Graphical Web UI**: Open [http://127.0.0.1:5000](http://127.0.0.1:5000) to use the beautifully styled Catppuccin web interface. Just paste your codebase path/URL, set your options, and download your converted file! Once your download completes, you'll see a new **Ask AI for a Code Review** section with pre-configured, comprehensive review prompts tailored for models like ChatGPT, Claude, Gemini, DeepSeek, Mistral, Perplexity, Grok, Meta AI, HuggingChat, and Poe.
-* **Swagger API Docs**: Open [http://127.0.0.1:5000/apidocs/](http://127.0.0.1:5000/apidocs/) to view the interactive API playground.
+* **Graphical Web UI**: Open [http://127.0.0.1:5003](http://127.0.0.1:5003) to use the beautifully styled Catppuccin web interface. Just paste your codebase path/URL, set your options, and download your converted file! Once your download completes, you'll see a new **Ask AI for a Code Review** section with pre-configured, comprehensive review prompts tailored for models like ChatGPT, Claude, Gemini, DeepSeek, Mistral, Perplexity, Grok, Meta AI, HuggingChat, and Poe.
+* **Swagger API Docs**: Open [http://127.0.0.1:5003/apidocs/](http://127.0.0.1:5003/apidocs/) to view the interactive API playground.
 
 ### Command Line Interface (CLI)
 
@@ -87,16 +87,16 @@ cb --input "./my_project" --output "output.txt" --output_type "txt" --verbose
 ```python
 from codebase_convert import CodebaseConvert
 
-# Basic usage
-converter = CodebaseConvert(
+# Basic usage — use as a context manager to ensure safe resource cleanup
+with CodebaseConvert(
     input_path="path_or_github_url",
     output_path="output_path",
     output_type="md"
-)
-converter.get_file()
+) as converter:
+    converter.get_file()
 
 # Advanced usage with exclusions and AI optimization
-converter = CodebaseConvert(
+with CodebaseConvert(
     input_path="./my_project",
     output_path="./output.md",
     output_type="md",
@@ -105,12 +105,17 @@ converter = CodebaseConvert(
     ai_optimize=True,  # Defaults to True. Set to False to retain raw whitespace formats
     strip_comments=False, # Defaults to False. Set to True to remove all prefixed comments
     verbose=True
-)
-converter.get_file()
+) as converter:
+    converter.get_file()
 
-# Get text content without saving to file
-text_content = converter.get_text()
-print(text_content)
+    # Get text content without saving to file
+    text_content = converter.get_text()
+    print(text_content)
+
+# Token estimation (uses cl100k_base encoding via tiktoken)
+from codebase_convert.utils import estimate_tokens
+token_count = estimate_tokens(text_content)
+print(f"Estimated tokens: {token_count:,}")
 ```
 
 ## 🎯 Exclusion Patterns
@@ -215,7 +220,7 @@ cb --input "https://github.com/username/repo" --output "repo_clean.txt" --output
 from codebase_convert import CodebaseConvert
 
 def analyze_codebase(project_path):
-    converter = CodebaseConvert(
+    with CodebaseConvert(
         input_path=project_path,
         output_path="analysis.txt",
         output_type="txt",
@@ -223,14 +228,12 @@ def analyze_codebase(project_path):
         ai_optimize=True,
         strip_comments=False,
         verbose=True
-    )
-    
-    # Get the content
-    content = converter.get_text()
-    
+    ) as converter:
+        # Get the content
+        content = converter.get_text()
+
     # Process with your preferred LLM/AI tool
     # analysis_result = your_ai_tool.analyze(content)
-    
     return content
 
 # Usage
@@ -245,6 +248,49 @@ code_content = analyze_codebase("./my_project")
 - **Analysis**: Feed entire codebases to AI tools for analysis
 - **Migration**: Document legacy codebases before migration
 - **Learning**: Study open-source projects more effectively
+
+## 🏗️ Architecture
+
+The package is structured into focused, single-responsibility services:
+
+```
+codebase_to_text/
+├── app.py                          # Flask web server — REST API + form routes
+├── setup.py                        # Package build configuration
+├── requirements.txt                # Runtime dependencies
+├── templates/
+│   └── index.html                  # Catppuccin web UI
+├── tests/
+│   └── test_codebase_convert.py    # Full unit test suite
+├── docs/
+│   └── README.md                   # This file
+└── codebase_convert/
+    ├── __init__.py                 # Package entry point
+    ├── codebase_convert.py         # Core orchestration and formatter strategy classes
+    └── utils/
+        ├── __init__.py             # Public re-exports for all utilities
+        ├── utils.py                # Token estimation (cl100k_base via tiktoken)
+        ├── git_utils.py            # GitHub clone service with atexit cleanup registry
+        ├── fs_utils.py             # Filesystem walker (generator for local, threaded for remote)
+        └── image_utils.py          # Image compression and type detection
+```
+
+### Key Design Decisions
+
+**Strategy Pattern for Output Formats**
+`TxtFormatter`, `MdFormatter`, and `DocxFormatter` all implement the `OutputFormatter` abstract base class. Each formatter owns its own `format_file_success()`, `format_file_error()`, `combine_text()`, and `save_file()` methods — including all `python-docx` object manipulation inside `DocxFormatter`. `get_file()` in `CodebaseConvert` simply delegates to `self.formatter.save_file(...)` with no output-type branching logic.
+
+**Filesystem Walker Strategy**
+`fs_utils.py` exposes a `walk_filesystem_generator()` that yields `(file, root, base_path)` tuples lazily. `process_files_with_strategy()` decides whether to consume that generator synchronously (local paths) or via a `ThreadPoolExecutor` (GitHub clones), keeping threading overhead off small local repositories.
+
+**GitHub Clone Lifecycle**
+`git_utils.py` maintains a module-level `_temp_dirs` registry. Every directory created by `clone_github_repo()` is appended to this list, and `atexit.register(cleanup_temp_dirs)` ensures all of them are deleted on process exit — including on `SIGTERM` — without relying on `__exit__` being called.
+
+**Security: Path Traversal Prevention**
+`_safe_input_path()` in `app.py` calls `pathlib.Path.resolve()` on both the input path and the workspace root before the `startswith` comparison, neutralising symlink-based directory escape attempts that `os.path.abspath` does not catch.
+
+**Token Estimation**
+All token counting is centralised in `codebase_convert/utils/utils.py` using `tiktoken`'s `cl100k_base` encoding. Neither `CodebaseConvert` nor `app.py` contain their own counting logic; both import from `codebase_convert.utils`.
 
 ## 🔄 Output Format
 

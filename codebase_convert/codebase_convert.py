@@ -15,8 +15,129 @@ import sys
 import base64
 import io
 import logging
+import uuid
+import abc
 from typing import List, Optional, Set, Tuple, Any
-import concurrent.futures
+
+from codebase_convert.utils import clone_github_repo, process_files_with_strategy, is_image_file, compress_image
+
+class OutputFormatter(abc.ABC):
+    @abc.abstractmethod
+    def format_file_success(self, file_path: str, base_path: str, file_content: str, ext: str, ai_optimize: bool) -> str:
+        pass
+        
+    @abc.abstractmethod
+    def format_file_error(self, file_path: str, base_path: str, error: Exception) -> str:
+        pass
+        
+    @abc.abstractmethod
+    def combine_text(self, folder_structure: str, file_contents: str) -> str:
+        pass
+
+    def save_file(self, text: str, output_path: str, verbose: bool) -> None:
+        with open(output_path, "w", encoding="utf-8") as file:
+            file.write(text)
+
+class TxtFormatter(OutputFormatter):
+    def format_file_success(self, file_path: str, base_path: str, file_content: str, ext: str, ai_optimize: bool) -> str:
+        rel_path = os.path.relpath(file_path, base_path)
+        if ai_optimize:
+            content = f"<file path=\"{rel_path}\">\n"
+            content += f"{file_content}\n"
+            content += f"\n</file>\n"
+            return content
+
+        content = f"\n\n{rel_path}\n"
+        content += f"File type: {ext or 'no extension'}\n"
+        content += f"{file_content}"
+        content += f"\n\n{'-' * 50}\nFile End\n{'-' * 50}\n"
+        return content
+        
+    def format_file_error(self, file_path: str, base_path: str, error: Exception) -> str:
+        rel_path = os.path.relpath(file_path, base_path)
+        content = f"\n\n{rel_path}\n"
+        content += f"File type: {os.path.splitext(file_path)[1] or 'no extension'}\n"
+        content += f"[Error: Could not process file - {str(error)}]"
+        content += f"\n\n{'-' * 50}\nFile End\n{'-' * 50}\n"
+        return content
+        
+    def combine_text(self, folder_structure: str, file_contents: str) -> str:
+        folder_structure_header = "Folder Structure"
+        file_contents_header = "File Contents"
+        delimiter = "-" * 50
+        return (f"{folder_structure_header}\n{delimiter}\n{folder_structure}\n\n"
+                f"{file_contents_header}\n{delimiter}\n{file_contents}")
+
+class DocxFormatter(TxtFormatter):
+    def __init__(self):
+        self.marker_start = f"(IMAGE_MARKER_{uuid.uuid4().hex})"
+        self.marker_end = f"(/IMAGE_MARKER_{uuid.uuid4().hex})"
+
+    def save_file(self, text: str, output_path: str, verbose: bool) -> None:
+        doc = Document()
+        segments = text.split(self.marker_start)
+        
+        if segments[0].strip():
+            doc.add_paragraph(segments[0])
+            
+        for segment in segments[1:]:
+            if self.marker_end in segment:
+                img_path, text_content = segment.split(self.marker_end, 1)
+                img_path = str(img_path.strip())
+                if verbose:
+                    logger.debug(f"Loading image from: {img_path}")
+                if not os.path.exists(img_path):
+                    if verbose:
+                        logger.warning(f"Image file not found at: {img_path}")
+                    doc.add_paragraph(f"[Missing image: {img_path}]")
+                else:
+                    try:
+                        doc.add_picture(img_path, width=Inches(6))
+                    except Exception as e:
+                        if verbose:
+                            logger.error(f"Error adding image {img_path}: {e}")
+                        doc.add_paragraph(f"[Error: Could not add image - {str(e)}]")
+                
+                if text_content.strip():
+                    doc.add_paragraph(text_content)
+        doc.save(output_path)
+
+class MdFormatter(OutputFormatter):
+    def _get_lang_from_ext(self, ext: str) -> str:
+        extension_map = {
+            '.py': 'python', '.js': 'javascript', '.ts': 'typescript', 
+            '.jsx': 'jsx', '.tsx': 'tsx', '.html': 'html', '.css': 'css', 
+            '.json': 'json', '.md': 'markdown', '.yml': 'yaml', '.yaml': 'yaml',
+            '.sh': 'bash', '.go': 'go', '.rs': 'go', '.java': 'java', 
+            '.cpp': 'java', '.c': 'c', '.h': 'c', '.cs': 'csharp', 
+            '.rb': 'ruby', '.php': 'php', '.sql': 'sql', '.xml': 'xml'
+        }
+        return extension_map.get(ext.lower(), '')
+
+    def format_file_success(self, file_path: str, base_path: str, file_content: str, ext: str, ai_optimize: bool) -> str:
+        rel_path = os.path.relpath(file_path, base_path)
+        lang = self._get_lang_from_ext(ext)
+        return f"\n### File: `{rel_path}`\n\n```{lang}\n{file_content}\n```\n"
+
+    def format_file_error(self, file_path: str, base_path: str, error: Exception) -> str:
+        rel_path = os.path.relpath(file_path, base_path)
+        return f"\n### File: `{rel_path}`\n\n```text\n[Error: Could not process file - {str(error)}]\n```\n"
+        
+    def combine_text(self, folder_structure: str, file_contents: str) -> str:
+        folder_structure_header = "Folder Structure"
+        file_contents_header = "File Contents"
+        return (f"# {folder_structure_header}\n\n```text\n{folder_structure}```\n\n"
+                f"# {file_contents_header}\n{file_contents}")
+
+def get_formatter(output_type: str) -> OutputFormatter:
+    if output_type == 'md':
+        return MdFormatter()
+    elif output_type == 'docx':
+        return DocxFormatter()
+    elif output_type == 'txt':
+        return TxtFormatter()
+    else:
+        raise ValueError(f"Invalid output type: {output_type}. Supported types: txt, docx, md")
 
 import git
 import pathspec
@@ -65,7 +186,6 @@ class CodebaseConvert:
             'ai_optimize': ai_optimize,
             'strip_comments': strip_comments,
         }
-        self.temp_folder_path: Optional[str] = None
         
         # Configure logging
         if verbose:
@@ -73,16 +193,21 @@ class CodebaseConvert:
         else:
             logging.basicConfig(level=logging.INFO, format='%(message)s')
 
+        self.formatter = get_formatter(self.output_type)
+
         # Initialize exclusion patterns
         self.exclude_patterns: Set[str] = set()
         self.excluded_files_count = 0
         self.gitignore_spec: Optional[pathspec.PathSpec] = None
 
-        # Add supported image extensions
-        self.image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico', '.webp', '.icns', '.svg'}
-
         # Load exclusion patterns from various sources
         self._load_exclusion_patterns(exclude)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
 
     @property
     def verbose(self) -> bool:
@@ -115,7 +240,7 @@ class CodebaseConvert:
         
         try:
             with open(gitignore_path, 'r', encoding='utf-8') as f:
-                self.gitignore_spec = pathspec.PathSpec.from_lines('gitwildmatch', f)
+                self.gitignore_spec = pathspec.PathSpec.from_lines('gitignore', f)
             if self.verbose:
                 logger.debug(f"Loaded gitignore patterns from {gitignore_path}")
         except Exception as e:
@@ -135,7 +260,7 @@ class CodebaseConvert:
     def _add_default_patterns(self):
         """Add default exclusion patterns for common files/folders."""
         default_excludes = {
-            '.git/', '.git/**',
+            '.git/', '.git/**', '.github/', '.gitlab/', '.hg/', '.hg/**',
             '__pycache__/', '**/__pycache__/**',
             '*.pyc', '*.pyo', '*.pyd',
             '.venv/', 'venv/', 'env/', '.env',
@@ -148,7 +273,13 @@ class CodebaseConvert:
             'build/', 'dist/',
             '*.egg-info/',
             '.vscode/', '*-lock.json', '*-lock.yaml',
-            '.mypy_cache/', 'server_uploads/', '*.jsonl', '.env.keys'
+            '.mypy_cache/', 'server_uploads/', '*.jsonl', '.env.keys',
+            '.netlify/', '.vercel/', '.aws-sam/', '.serverless/', '.azure/', '.gcloud/',
+            'coverage/', 'logs/', 'debug.log', 'debug.log.*',
+            '.idea/', '*.iml', '*.iws', '*.ipr',
+            '.vs/', '*.sln', '*.suo', '*.vcxproj*',
+            '.gradle/', 'build/', 'out/',
+            '.vscode-test/',
         }
         if self.config.get('ai_optimize', False):
             media_excludes = {
@@ -351,38 +482,15 @@ class CodebaseConvert:
         return False
 
     def _process_files(self, path: str) -> str:
-        """Process files using multithreading, respecting exclusion patterns"""
-        excluded_dirs: Set[str] = set()
-        file_paths_to_process = []
-
-        for root, dirs, files in os.walk(path):
-            if self._handle_directory_exclusion(root, path, excluded_dirs):
-                continue
-
-            if self._skip_excluded_dir(root, excluded_dirs):
-                continue
-
-            self._filter_directories_for_processing(dirs, root, path)
-
-            for file in files:
-                file_paths_to_process.append((file, root, path))
-
-        content_pieces = []
-        processed_count = 0
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(self._process_single_file, f_tuple[0], f_tuple[1], f_tuple[2])
-                for f_tuple in file_paths_to_process
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    file_result = future.result()
-                    if file_result:
-                        content_pieces.append(file_result)
-                        processed_count += 1
-                except Exception as e:
-                    logger.error(f"Error processing a file: {e}")
+        """Process files based on local or remote strategy, respecting exclusion patterns"""
+        content_pieces, processed_count = process_files_with_strategy(
+            self.is_github_repo(),
+            path,
+            self._should_exclude,
+            self._handle_directory_exclusion,
+            self._filter_directories_for_processing,
+            self._process_single_file
+        )
 
         if self.verbose:
             logger.info(f"Processed {processed_count} files")
@@ -407,40 +515,6 @@ class CodebaseConvert:
             if not self._should_exclude(dir_path, path):
                 dirs.append(d)
 
-    def _is_image_file(self, file_path: str) -> bool:
-        """Check if the file is an image based on extension"""
-        return os.path.splitext(file_path)[1].lower() in self.image_extensions
-
-    def _compress_image(self, file_path: str, max_size: Tuple[int, int] = (1024, 1024), quality: int = 70) -> Tuple[Optional[bytes], Optional[str]]:
-        """Resize and compress image for smaller blob size"""
-        try:
-            from PIL import Image
-            with Image.open(file_path) as img:
-                # Convert to RGB if necessary for JPEG compatibility
-                if img.mode in ("RGBA", "P"):
-                    # Create a white background for transparent images
-                    background = Image.new("RGB", img.size, (255, 255, 255))
-                    if img.mode == "RGBA":
-                        background.paste(img, mask=img.split()[3])
-                    else:
-                        background.paste(img)
-                    img = background
-                elif img.mode != "RGB":
-                    img = img.convert("RGB")
-
-                # Resize if larger than max_size while maintaining aspect ratio
-                if img.width > max_size[0] or img.height > max_size[1]:
-                    img.thumbnail(max_size, Image.Resampling.LANCZOS)
-
-                output = io.BytesIO()
-                # Save as JPEG with specified quality
-                img.save(output, format="JPEG", quality=quality, optimize=True)
-                return output.getvalue(), "image/jpeg"
-        except Exception as e:
-            if self.verbose:
-                logger.warning(f"Compression failed for {file_path}: {e}")
-            return None, None
-
     def _process_single_file(self, file: str, root: str, path: str) -> Optional[str]:
         """Process a single file and return its content or None if excluded"""
         file_path = os.path.join(root, file)
@@ -454,15 +528,15 @@ class CodebaseConvert:
             logger.debug(f"Processing: {file_path}")
 
         try:
-            if self.output_type == 'docx' and self._is_image_file(file_path):
+            if self.output_type == 'docx' and is_image_file(file_path):
                 # For images in docx mode, return special marker with evaluated path
-                return f"\n\n(IMAGE_MARKER){os.path.abspath(file_path)}(/IMAGE_MARKER)\n"
+                return f"\n\n{self.formatter.marker_start}{os.path.abspath(file_path)}{self.formatter.marker_end}\n"
 
-            if self.config.get('ai_optimize', False) and self._is_image_file(file_path):
+            if self.config.get('ai_optimize', False) and is_image_file(file_path):
                 try:
                     rel_path = os.path.relpath(file_path, path)
                     # Attempt to compress the image
-                    blob_bytes, mime_type = self._compress_image(file_path)
+                    blob_bytes, mime_type = compress_image(file_path, verbose=self.verbose)
 
                     if blob_bytes:
                         blob = base64.b64encode(blob_bytes).decode('utf-8')
@@ -510,43 +584,19 @@ class CodebaseConvert:
     def _format_file_content(self, file_path: str, base_path: str) -> str:
         """Format successful file content for output"""
         file_content = self._get_file_contents(file_path)
-        rel_path = os.path.relpath(file_path, base_path)
         ext = os.path.splitext(file_path)[1]
 
         if self.config.get('ai_optimize', True):
             file_content = self._optimize_for_ai(file_content)
         
-        if self.output_type == 'md':
-            lang = self._get_lang_from_ext(ext)
-            return f"\n### File: `{rel_path}`\n\n```{lang}\n{file_content}\n```\n"
-
-        if self.config.get('ai_optimize', True):
-            content = f"<file path=\"{rel_path}\">\n"
-            content += f"{file_content}\n"
-            content += f"\n</file>\n"
-            return content
-
-        content = f"\n\n{rel_path}\n"
-        content += f"File type: {ext or 'no extension'}\n"
-        content += f"{file_content}"
-        content += f"\n\n{'-' * 50}\nFile End\n{'-' * 50}\n"
-        return content
+        return self.formatter.format_file_success(file_path, base_path, file_content, ext, self.config.get('ai_optimize', True))
 
     def _format_file_error(self, file_path: str, base_path: str, error: Exception) -> str:
         """Format file processing error for output"""
         if self.verbose:
             logger.error(f"Error processing {file_path}: {error}")
-
-        rel_path = os.path.relpath(file_path, base_path)
-        
-        if self.output_type == 'md':
-            return f"\n### File: `{rel_path}`\n\n```text\n[Error: Could not process file - {str(error)}]\n```\n"
             
-        content = f"\n\n{rel_path}\n"
-        content += f"File type: {os.path.splitext(file_path)[1] or 'no extension'}\n"
-        content += f"[Error: Could not process file - {str(error)}]"
-        content += f"\n\n{'-' * 50}\nFile End\n{'-' * 50}\n"
-        return content
+        return self.formatter.format_file_error(file_path, base_path, error)
 
     def get_text(self) -> str:
         """Generate the combined text output"""
@@ -554,124 +604,42 @@ class CodebaseConvert:
         file_contents = ""
 
         if self.is_github_repo():
-            self._clone_github_repo()
-            if self.temp_folder_path is None:
+            temp_folder_path = clone_github_repo(self.input_path, self.verbose)
+            if temp_folder_path is None:
                 raise RuntimeError("Failed to create temporary folder for GitHub repository")
-            folder_structure = self._parse_folder(self.temp_folder_path)
-            file_contents = self._process_files(self.temp_folder_path)
+            folder_structure = self._parse_folder(temp_folder_path)
+            file_contents = self._process_files(temp_folder_path)
         else:
             folder_structure = self._parse_folder(self.input_path)
             file_contents = self._process_files(self.input_path)
 
         # Section headers
-        folder_structure_header = "Folder Structure"
-        file_contents_header = "File Contents"
+        return self.formatter.combine_text(folder_structure, file_contents)
 
-        # Delimiters
-        delimiter = "-" * 50
+    # Estimate token method removed. Use codebase_convert.utils.estimate_tokens instead.
 
-        # Format the final text
-        if self.output_type == 'md':
-            final_text = (f"# {folder_structure_header}\n\n```text\n{folder_structure}```\n\n"
-                          f"# {file_contents_header}\n{file_contents}")
-        else:
-            final_text = (f"{folder_structure_header}\n{delimiter}\n{folder_structure}\n\n"
-                          f"{file_contents_header}\n{delimiter}\n{file_contents}")
-
-        return final_text
-
-    def _estimate_tokens(self, text: str) -> Optional[int]:
-        """Estimate token count for LLM usage using tiktoken"""
-        if not HAS_TIKTOKEN:
-            return None
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            # tiktoken uses a fast C++ parser. We must handle any potential parsing limitations though.
-            return len(enc.encode(text, disallowed_special=()))
-        except Exception as e:
-            if self.verbose:
-                logger.warning(f"Could not estimate tokens: {e}")
-            return None
-
-    def get_file(self):
+    def get_file(self, text_output: Optional[str] = None):
         """Generate and save the output file"""
         if self.verbose:
             logger.info("Generating text layout...")
-        text = self.get_text()
+        text = text_output if text_output is not None else self.get_text()
 
-        if self.output_type in ("txt", "md"):
-            with open(self.output_path, "w", encoding="utf-8") as file:
-                file.write(text)
-        elif self.output_type == "docx":
-            doc = Document()
-            # Split text into segments based on image markers
-            segments = text.split('(IMAGE_MARKER)')
-            
-            # Add first text segment
-            if segments[0].strip():
-                doc.add_paragraph(segments[0])
-            
-            # Process remaining segments
-            for segment in segments[1:]:
-                if '(/IMAGE_MARKER)' in segment:
-                    # Extract image path and remaining text
-                    img_path, text_content = segment.split('(/IMAGE_MARKER)', 1)
-                    img_path = str(img_path.strip())  # Remove any whitespace
-                    if self.verbose:
-                        logger.debug(f"Loading image from: {img_path}")
-                    if not os.path.exists(img_path):
-                        if self.verbose:
-                            logger.warning(f"Image file not found at: {img_path}")
-                        doc.add_paragraph(f"[Missing image: {img_path}]")
-                    else:
-                        try:
-                            doc.add_picture(img_path, width=Inches(6))
-                        except Exception as e:
-                            if self.verbose:
-                                logger.error(f"Error adding image {img_path}: {e}")
-                            doc.add_paragraph(f"[Error: Could not add image - {str(e)}]")
-                    
-                    if text_content.strip():
-                        doc.add_paragraph(text_content)
-            doc.save(self.output_path)
-        else:
-            raise ValueError(f"Invalid output type: {self.output_type}. Supported types: txt, docx, md")
+        self.formatter.save_file(text, self.output_path, self.verbose)
 
         if self.verbose:
             logger.info(f"Output saved to: {self.output_path}")
             
-        token_count = self._estimate_tokens(text)
+        from codebase_convert.utils import estimate_tokens
+        token_count = estimate_tokens(text, verbose=self.verbose)
         if token_count is not None:
             logger.info(f"Estimated token count (cl100k_base): ~{token_count:,}")
 
     #### GitHub Support ####
 
-    def _clone_github_repo(self):
-        """Clone GitHub repository to temporary directory"""
-        try:
-            self.temp_folder_path = tempfile.mkdtemp(prefix="github_repo_")
-            git.Repo.clone_from(self.input_path, self.temp_folder_path)
-            if self.verbose:
-                logger.info(f"GitHub repository cloned to: {self.temp_folder_path}")
-        except Exception as e:
-            logger.error(f"Error cloning GitHub repository: {e}")
-            raise
-
     def is_github_repo(self) -> bool:
         """Check if input path is a GitHub repository URL"""
         return (self.input_path.startswith("https://github.com/") or
                 self.input_path.startswith("git@github.com:"))
-
-    def is_temp_folder_used(self) -> bool:
-        """Check if temporary folder is being used"""
-        return self.temp_folder_path is not None
-
-    def clean_up_temp_folder(self):
-        """Clean up temporary folder"""
-        if self.temp_folder_path and os.path.exists(self.temp_folder_path):
-            shutil.rmtree(self.temp_folder_path)
-            if self.verbose:
-                logger.info(f"Cleaned up temporary folder: {self.temp_folder_path}")
 
 
 def main():
@@ -705,7 +673,7 @@ Examples:
     args = parser.parse_args()
 
     try:
-        code_to_text = CodebaseConvert(
+        with CodebaseConvert(
             input_path=args.input,
             output_path=args.output,
             output_type=args.output_type,
@@ -714,20 +682,15 @@ Examples:
             exclude=args.exclude,
             ai_optimize=not args.no_ai_optimize,
             strip_comments=args.strip_comments
-        )
+        ) as code_to_text:
 
-        code_to_text.get_file()
+            code_to_text.get_file()
 
         logger.info("✅ Conversion completed successfully!")
 
     except (OSError, ValueError, git.GitCommandError) as e:
         logger.error(f"❌ Error: {e}")
         return 1
-
-    finally:
-        # Clean up temporary folder if it was used
-        if 'code_to_text' in locals() and code_to_text.is_temp_folder_used():
-            code_to_text.clean_up_temp_folder()
 
     return 0
 

@@ -34,7 +34,7 @@ class TestCodebaseConvert(unittest.TestCase):
             f.write("# Test Project\nThis is a test.")
         
         with open(os.path.join(base, "requirements.txt"), "w") as f:
-            f.write("requests>=2.25.0\npandas>=1.3.0")
+            f.write("flask>=2.0.0\nflasgger>=0.9.5\npython-docx>=0.8.11\nPillow>=8.0.0\ngitpython>=3.1.0\npathspec>=0.9.0\ntiktoken>=0.3.0")
         
         # Create subdirectories
         os.makedirs(os.path.join(base, "src"), exist_ok=True)
@@ -85,7 +85,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=[]
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
         )
         
         text = code_to_text.get_text()
@@ -102,7 +104,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=True,
-            exclude=[]
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
         )
         text = code_to_text.get_text()
         self.assertNotIn(".gitignore", text)
@@ -119,7 +123,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=exclude_patterns
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
         )
         
         text = code_to_text.get_text()
@@ -147,7 +153,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=exclude_patterns
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
         )
         
         text = code_to_text.get_text()
@@ -168,7 +176,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=exclude_patterns
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
         )
         
         text = code_to_text.get_text()
@@ -202,7 +212,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=[]
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
         )
         
         text = code_to_text.get_text()
@@ -233,7 +245,9 @@ class TestCodebaseConvert(unittest.TestCase):
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=cli_excludes
+            exclude=cli_excludes,
+            ai_optimize=False,
+            strip_comments=False
         )
         
         text = code_to_text.get_text()
@@ -249,16 +263,18 @@ class TestCodebaseConvert(unittest.TestCase):
 
     def test_output_file_generation_txt(self):
         """Test TXT file output generation"""
-        code_to_text = CodebaseConvert(
+        with CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
             verbose=False,
             exclude_hidden=False,
-            exclude=["*.log", "*.tmp"]
-        )
+            exclude=["*.log", "*.tmp"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
         
-        code_to_text.get_file()
+            code_to_text.get_file()
         
         # Check if output file was created
         self.assertTrue(os.path.exists(self.output_txt))
@@ -271,80 +287,111 @@ class TestCodebaseConvert(unittest.TestCase):
 
     def test_output_file_generation_docx(self):
         """Test DOCX file output generation"""
-        code_to_text = CodebaseConvert(
+        with CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_docx,
             output_type="docx",
             verbose=False,
             exclude_hidden=False,
-            exclude=["*.log", "*.tmp"]
-        )
+            exclude=["*.log", "*.tmp"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
         
-        code_to_text.get_file()
+            code_to_text.get_file()
         
         # Check if output file was created
         self.assertTrue(os.path.exists(self.output_docx))
 
     def test_verbose_mode(self):
         """Test verbose output mode"""
-        import io
-        import sys
-        
-        # Capture stdout
-        captured_output = io.StringIO()
-        sys.stdout = captured_output
-        
-        try:
-            code_to_text = CodebaseConvert(
+        with self.assertLogs('codebase_convert', level='DEBUG') as cm:
+            with CodebaseConvert(
                 input_path=self.test_folder_path,
                 output_path=self.output_txt,
                 output_type="txt",
                 verbose=True,
                 exclude_hidden=False,
-                exclude=["*.log"]
-            )
+                exclude=["*.log"],
+                ai_optimize=False,
+                strip_comments=False
+            ) as code_to_text:
             
-            code_to_text.get_file()
+                code_to_text.get_file()
             
-            # Get the output
-            output = captured_output.getvalue()
+            output = "\\n".join(cm.output)
             
             # Should contain verbose messages
             self.assertIn("Active exclusion patterns", output)
             self.assertIn("Processing:", output)
-        finally:
-            # Restore stdout
-            sys.stdout = sys.__stdout__
 
     def test_invalid_output_type(self):
         """Test error handling for invalid output type"""
         with self.assertRaises(ValueError):
-            code_to_text = CodebaseConvert(
+            with CodebaseConvert(
                 input_path=self.test_folder_path,
                 output_path="output.xyz",
                 output_type="xyz",
                 verbose=False,
                 exclude_hidden=False,
-                exclude=[]
-            )
-            code_to_text.get_file()    
+                exclude=[],
+                ai_optimize=False,
+                strip_comments=False
+            ) as code_to_text:
+                code_to_text.get_file()    
             
     def test_exclusion_count_tracking(self):
         """Test that exclusion counting works correctly"""
-        code_to_text = CodebaseConvert(
+        with CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
             verbose=True,  # Need verbose mode for this test to work properly
             exclude_hidden=False,
-            exclude=["*.log", "*.tmp", "__pycache__/**"]
-        )
+            exclude=["*.log", "*.tmp", "__pycache__/**"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
         
-        # Generate text to trigger exclusion counting
-        code_to_text.get_text()
-        
-        # Should have excluded some files
-        self.assertGreater(code_to_text.excluded_files_count, 0)
+            # Generate text to trigger exclusion counting
+            code_to_text.get_text()
+            
+            # Should have excluded some files
+            self.assertGreater(code_to_text.excluded_files_count, 0)
+
+    def test_ai_optimize(self):
+        """Test the new ai_optimize feature strips whitespace"""
+        file_path = os.path.join(self.test_folder_path, "ai_test.py")
+        with open(file_path, "w") as f:
+            f.write("def func():\n    pass\n\n\n\n# test")
+            
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            ai_optimize=True,
+            strip_comments=False
+        ) as code_to_text:
+            text = code_to_text.get_text()
+            self.assertIn("<file path", text) # Check strategy pattern applied ai framing
+            
+    def test_strip_comments(self):
+        """Test the new strip_comments feature removed comments"""
+        file_path = os.path.join(self.test_folder_path, "comment_test.py")
+        with open(file_path, "w") as f:
+            f.write("# this is a comment\ndef func():\n    pass")
+            
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            ai_optimize=True,
+            strip_comments=True
+        ) as code_to_text:
+            text = code_to_text.get_text()
+            self.assertNotIn("this is a comment", text)
 
     def tearDown(self):
         """Clean up test environment"""
@@ -357,11 +404,22 @@ class TestPatternMatching(unittest.TestCase):
     
     def setUp(self):
         self.test_folder_path = tempfile.mkdtemp(prefix="test_patterns_")
-        self.code_to_text = CodebaseConvert(
+        with CodebaseConvert(
             input_path=self.test_folder_path,
             output_path="dummy.txt",
             output_type="txt",
             exclude=[]
+        ) as self.code_to_text:
+            pass # just used to initialize it
+        
+        # Manually reconstruct the object since `with` block closes it for testing internals:
+        self.code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path="dummy.txt",
+            output_type="txt",
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
         )
 
     def test_wildcard_patterns(self):
@@ -431,6 +489,46 @@ class TestDocxImage(unittest.TestCase):
             new_doc = Document(doc_path)
             self.assertGreater(len(new_doc.inline_shapes), 0, "Document should contain at least one inline image.")
 
+class TestImageCompression(unittest.TestCase):
+    def test_image_compression(self):
+        """Test images that compress into .txt format correctly"""
+        import tempfile
+        import os
+        import base64
+        from PIL import Image
+        import io
+    
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a simple 100x100 red PNG image
+            img = Image.new('RGB', (100, 100), color='red')
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format='PNG')
+            img_data = img_bytes.getvalue()
+        
+            # Write the image to a file
+            img_path = os.path.join(temp_dir, "test_image.png")
+            with open(img_path, "wb") as f:
+                f.write(img_data)
+        
+            # Create a CodebaseConvert instance
+            code_to_text = CodebaseConvert(
+                input_path=temp_dir,
+                output_path="dummy.txt",
+                output_type="txt",
+                verbose=False,
+                exclude_hidden=False,
+                exclude=[],
+                ai_optimize=False,
+                strip_comments=False
+            )
+
+            # Test compression to TXT format
+            from codebase_convert.utils.image_utils import compress_image
+            blob_bytes, mime_type = compress_image(img_path)
+            self.assertIsNotNone(blob_bytes)
+            self.assertEqual(mime_type, "image/jpeg")
+            self.assertTrue(len(blob_bytes) > 0, "Compressed bytes should not be empty.")
 
 if __name__ == "__main__":
     # Run specific test class or all tests

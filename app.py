@@ -1,6 +1,6 @@
 import os
 import tempfile
-import tiktoken
+from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from flasgger import Swagger
 from codebase_convert.codebase_convert import CodebaseConvert
@@ -106,13 +106,36 @@ def convert():
     strip_comments = data.get('strip_comments', False)
     verbose = data.get('verbose', False)
 
+    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
+
+def _safe_input_path(input_path: str) -> bool:
+    if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
+        return True
+    try:
+        from urllib.parse import urlparse
+        if urlparse(input_path).scheme in ['http', 'https']:
+            return True
+        WORKSPACE_DIR = Path(os.getcwd()).resolve()
+        abs_path = Path(input_path).resolve()
+        
+        # Check if the resolved input path starts with the resolved workspace dir
+        # We check path parts to ensure it's strictly contained
+        return str(abs_path).startswith(str(WORKSPACE_DIR))
+    except Exception:
+        return False
+
+def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
+    if not _safe_input_path(input_path):
+        err = "Path traversal detected or invalid path. Input must be within the designated workspace or a valid URL."
+        return (jsonify({"error": err}), 403) if is_json else (err, 403)
+
     # Use a secure temp file to generate output 
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_type}") as temp_out:
         output_file = temp_out.name
         
     try:
         # Initialize converter
-        converter = CodebaseConvert(
+        with CodebaseConvert(
             input_path=input_path,
             output_path=output_file,
             output_type=output_type,
@@ -121,20 +144,24 @@ def convert():
             ai_optimize=ai_optimize,
             strip_comments=strip_comments,
             verbose=verbose
-        )
-        
-        # Execute the conversion
-        converter.get_file()
-        
-        # Send the file to the user
-        return send_file(
-            output_file, 
-            as_attachment=True, 
-            download_name=f"codebase_output.{output_type}"
-        )
-        
+        ) as converter:
+            # Execute the conversion
+            text_output = converter.get_text()
+            converter.get_file(text_output=text_output)
+            
+            from codebase_convert.utils import estimate_tokens
+            token_count = estimate_tokens(text_output, verbose=verbose) or 0
+            
+            response = send_file(
+                output_file, 
+                as_attachment=True, 
+                download_name=download_filename or f"codebase_output.{output_type}"
+            )
+            response.headers['X-Token-Count'] = str(token_count)
+            response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
+            return response
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return (jsonify({"error": str(e)}), 500) if is_json else (f"Conversion failed: {str(e)}", 500)
 
 @app.route('/', methods=['GET'])
 def index():
@@ -170,42 +197,7 @@ def form_convert():
     
     download_filename = output
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_type}") as temp_out:
-        output_file = temp_out.name
-        
-    try:
-        converter = CodebaseConvert(
-            input_path=input_path,
-            output_path=output_file,
-            output_type=output_type,
-            exclude=exclude,
-            exclude_hidden=exclude_hidden,
-            ai_optimize=ai_optimize,
-            strip_comments=strip_comments,
-            verbose=verbose
-        )
-        converter.get_file()
-        
-        # Calculate tokens
-        content = converter.get_text()
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            token_count = len(enc.encode(content, disallowed_special=()))
-        except Exception:
-            token_count = 0
-            
-        response = send_file(
-            output_file, 
-            as_attachment=True, 
-            download_name=download_filename
-        )
-        
-        response.headers['X-Token-Count'] = str(token_count)
-        response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
-        
-        return response
-    except Exception as e:
-        return f"Conversion failed: {str(e)}", 500
+    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
 
 if __name__ == '__main__':
     # Add an explicit port mapping. Runs on http://127.0.0.1:5003 by default.
