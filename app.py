@@ -1,9 +1,12 @@
 import os
 import tempfile
+import shutil
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file, render_template
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request
 from flasgger import Swagger
 from codebase_convert.codebase_convert import CodebaseConvert
+from codebase_convert.utils import walk_filesystem_generator
 
 app = Flask(__name__)
 
@@ -108,26 +111,71 @@ def convert():
 
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
 
+WORKSPACE_DIR = Path(os.getcwd()).resolve()
+
 def _safe_input_path(input_path: str) -> bool:
+    # Allow explicit GitHub forms
     if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
         return True
+
+    parsed = urlparse(input_path)
+    # Block all other URL schemes to prevent SSRF
+    if parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
+        return False
+
     try:
-        from urllib.parse import urlparse
-        if urlparse(input_path).scheme in ['http', 'https']:
-            return True
-        WORKSPACE_DIR = Path(os.getcwd()).resolve()
-        abs_path = Path(input_path).resolve()
-        
-        # Check if the resolved input path starts with the resolved workspace dir
-        # We check path parts to ensure it's strictly contained
-        return str(abs_path).startswith(str(WORKSPACE_DIR))
+        target = Path(input_path)
+        if not target.is_absolute():
+            target = WORKSPACE_DIR / target
+        target = target.resolve()
+        return target == WORKSPACE_DIR or target.is_relative_to(WORKSPACE_DIR)
     except Exception:
         return False
 
+def write_to(self, output_path: str) -> None:
+    repo_path = self._resolve_working_path()
+    with open(output_path, "w", encoding="utf-8") as out:
+        out.write(self._parse_folder(repo_path))
+        out.write("\n--- FILE CONTENTS ---\n\n")
+        for file, root, base in walk_filesystem_generator(
+            repo_path,
+            self._should_exclude,
+            self._handle_directory_exclusion,
+            self._filter_directories_for_processing
+        ):
+            chunk = self._process_single_file(file, root, base)
+            if chunk:
+                out.write(chunk)
+
 def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
     if not _safe_input_path(input_path):
-        err = "Path traversal detected or invalid path. Input must be within the designated workspace or a valid URL."
+        err = "Path traversal detected or invalid path."
         return (jsonify({"error": err}), 403) if is_json else (err, 403)
+
+    tmpdir = tempfile.mkdtemp(prefix="convert_")
+    output_file = os.path.join(tmpdir, f"output.{output_type}")
+
+    @after_this_request
+    def cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
+
+    with CodebaseConvert(
+        input_path=input_path,
+        output_path=output_file,
+        output_type=output_type,
+        exclude=exclude,
+        exclude_hidden=exclude_hidden,
+        ai_optimize=ai_optimize,
+        strip_comments=strip_comments,
+        verbose=verbose
+    ) as converter:
+        converter.write_to(output_file)  # streaming writer
+        return send_file(
+            output_file,
+            as_attachment=True,
+            download_name=download_filename or f"codebase_output.{output_type}"
+        )
 
     # Use a secure temp file to generate output 
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_type}") as temp_out:
@@ -199,6 +247,9 @@ def form_convert():
 
     return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
 
-if __name__ == '__main__':
-    # Add an explicit port mapping. Runs on http://127.0.0.1:5003 by default.
-    app.run(debug=True, host='0.0.0.0', port=5003)
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5003"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+
+    app.run(debug=debug, host=host, port=port)

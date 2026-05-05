@@ -2,7 +2,6 @@
 
 from setuptools import setup, find_packages
 import os
-print(os.path.dirname(__file__))
 setup(
     name="codebase_convert",
     version="2.0.0",
@@ -24,7 +23,7 @@ setup(
     author="Misterscan",
     author_email="misterscanmusic@aol.com",
     description="A Python package to convert codebase to text",
-    license="MIT",
+    license="Apache-2.0",
     long_description=open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs/README.md"), "r", encoding="utf-8").read(),
     download_url="https://github.com/Misterscan/codebase_convert/releases/download/v2.0.0/codebase_convert-2.0.0.tar.gz",
     long_description_content_type="text/markdown",
