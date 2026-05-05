@@ -177,3 +177,5 @@ temp/
 # Output files
 output.txt
 output.docx
+converted-repos/
+.exclude

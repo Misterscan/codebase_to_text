@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Codebase Convert</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            /* Catppuccin Mocha Palette */
+            --ctp-base: #1e1e2e;
+            --ctp-mantle: #181825;
+            --ctp-crust: #11111b;
+            --ctp-text: #cdd6f4;
+            --ctp-subtext1: #bac2de;
+            --ctp-subtext0: #a6adc8;
+            --ctp-overlay2: #9399b2;
+            --ctp-overlay1: #7f849c;
+            --ctp-surface2: #585b70;
+            --ctp-surface1: #45475a;
+            --ctp-surface0: #313244;
+            --ctp-lavender: #b4befe;
+            --ctp-blue: #89b4fa;
+            --ctp-rosewater: #f5e0dc;
+        }
+        body { 
+            padding: 40px; 
+            background-color: var(--ctp-base); 
+            color: var(--ctp-text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        h1, h2, h3, h4, h5, h6, p, .form-label, .form-check-label {
+            color: var(--ctp-text) !important;
+        }
+        .card { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background-color: var(--ctp-mantle);
+            border: 1px solid var(--ctp-surface0);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border-radius: 12px;
+        }
+        .text-muted { color: var(--ctp-overlay1) !important; }
+        
+        /* Form Inputs */
+        .form-control, .form-select {
+            background-color: var(--ctp-surface0);
+            border: 1px solid var(--ctp-surface1);
+            color: var(--ctp-text);
+        }
+        .form-control:focus, .form-select:focus {
+            background-color: var(--ctp-surface0);
+            border-color: var(--ctp-lavender);
+            color: var(--ctp-text);
+            box-shadow: 0 0 0 0.25rem rgba(180, 190, 254, 0.25);
+        }
+        .form-control::placeholder { color: var(--ctp-overlay2); }
+        
+        /* Form Checkboxes */
+        .form-check-input {
+            background-color: var(--ctp-surface0);
+            border-color: var(--ctp-surface1);
+        }
+        .form-check-input:checked {
+            background-color: var(--ctp-lavender);
+            border-color: var(--ctp-lavender);
+        }
+        .form-check-input:focus {
+            box-shadow: 0 0 0 0.25rem rgba(180, 190, 254, 0.25);
+            border-color: var(--ctp-lavender);
+        }
+
+        /* Buttons */
+        .btn-primary {
+            background-color: var(--ctp-blue);
+            border-color: var(--ctp-blue);
+            color: var(--ctp-crust);
+            font-weight: 600;
+        }
+        .btn-primary:hover, .btn-primary:focus {
+            background-color: var(--ctp-lavender);
+            border-color: var(--ctp-lavender);
+            color: var(--ctp-crust);
+        }
+        
+        /* Links */
+        a { color: var(--ctp-rosewater); text-decoration: none; }
+        a:hover { color: var(--ctp-lavender); text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card p-4">
+            <h1 class="mb-4 text-center">Codebase Convert</h1>
+            <p class="text-center text-muted mb-4">
+                Convert a GitHub repository or local path to a single TXT, MD, or DOCX file. <br>
+                <a href="/apidocs/">View Swagger API Docs</a>
+            </p>
+            
+            <form id="convertForm" action="/api/form-convert" method="POST">
+                <div class="mb-3">
+                    <label for="input" class="form-label">GitHub URL or Local Path *</label>
+                    <input type="text" class="form-control" id="input" name="input" placeholder="e.g. https://github.com/QaisarRajput/codebase_to_text" required>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label for="output" class="form-label">Output *</label>
+                        <input type="text" class="form-control" id="output" name="output" placeholder="e.g. output.txt" required>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label for="output_type" class="form-label">Output Type</label>
+                        <select class="form-select" id="output_type" name="output_type">
+                            <option value="txt">Text (.txt)</option>
+                            <option value="md">Markdown (.md)</option>
+                            <option value="docx">Word (.docx)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="col-md-4 mb-3">
+                        <label for="exclude" class="form-label">Exclude Patterns</label>
+                        <input type="text" class="form-control" id="exclude" name="exclude" placeholder="e.g. *.log, temp/">
+                    </div>
+                </div>
+
+                <div class="row mb-4">
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="exclude_hidden" name="exclude_hidden">
+                            <label class="form-check-label" for="exclude_hidden">Exclude Hidden</label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="verbose" name="verbose">
+                            <label class="form-check-label" for="verbose">Verbose</label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="no_ai_optimize" name="no_ai_optimize">
+                            <label class="form-check-label" for="no_ai_optimize">No AI Optimize</label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="strip_comments" name="strip_comments">
+                            <label class="form-check-label" for="strip_comments">Strip Comments</label>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100" id="submitBtn">Convert & Download</button>
+            </form>
+            
+            <div id="loading" class="text-center mt-3 d-none">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2 text-muted">Processing codebase... Please wait.</p>
+            </div>
+            
+            <div id="result" class="text-center mt-3 d-none">
+                <div class="alert alert-success" role="alert" style="background-color: var(--ctp-surface0); border-color: var(--ctp-blue); color: var(--ctp-text);">
+                    <strong>Success!</strong> Download started.<br>
+                    <span id="tokenCountBadge" class="badge" style="background-color: var(--ctp-lavender); color: var(--ctp-crust); font-size: 1.1em; margin-top: 10px;"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('convertForm').addEventListener('submit', async function(e) {
+            e.preventDefault(); // Stop standard form submission
+            
+            const btn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const resultMsg = document.getElementById('result');
+            const tokenBadge = document.getElementById('tokenCountBadge');
+            const form = e.target;
+            
+            btn.disabled = true;
+            loading.classList.remove('d-none');
+            resultMsg.classList.add('d-none');
+            
+            try {
+                const response = await fetch(form.action, {
+                    method: form.method,
+                    body: new URLSearchParams(new FormData(form))
+                });
+                
+                if (!response.ok) {
+                    const text = await response.text();
+                    alert("Error: " + text);
+                    return;
+                }
+                
+                // Extract file name from Content-Disposition if possible
+                let filename = form.output.value.trim();
+                const outputType = form.output_type.value;
+                if(!filename.endsWith('.' + outputType)) {
+                    filename += '.' + outputType;
+                }
+
+                // Get Token Count Header
+                const tokenCount = response.headers.get('X-Token-Count');
+                if (tokenCount) {
+                    tokenBadge.textContent = 'Estimated Token Count: ~' + parseInt(tokenCount).toLocaleString();
+                } else {
+                    tokenBadge.textContent = 'Token count unavailable';
+                }
+                
+                // Trigger download
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+                
+                resultMsg.classList.remove('d-none');
+            } catch (err) {
+                alert("Request failed: " + err.message);
+            } finally {
+                btn.disabled = false;
+                loading.classList.add('d-none');
+            }
+        });
+    </script>
+</body>
+</html>

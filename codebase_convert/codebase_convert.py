@@ -29,9 +29,9 @@ try:
 except ImportError:
     HAS_TIKTOKEN = False
 
-logger = logging.getLogger("codebase_to_text")
+logger = logging.getLogger("codebase_convert")
 
-class CodebaseToText:
+class CodebaseConvert:
     """
     Convert codebase to text with advanced exclusion patterns.
 
@@ -44,7 +44,7 @@ class CodebaseToText:
                  exclude_hidden: bool = False, exclude: Optional[List[str]] = None, 
                  ai_optimize: bool = True, strip_comments: bool = False):
         """
-        Initialize CodebaseToText converter.
+        Initialize CodebaseConvert converter.
         
         Args:
             input_path: Path to local directory or GitHub repository URL
@@ -705,7 +705,7 @@ Examples:
     args = parser.parse_args()
 
     try:
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=args.input,
             output_path=args.output,
             output_type=args.output_type,

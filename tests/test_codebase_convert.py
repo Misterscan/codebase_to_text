@@ -7,10 +7,10 @@ from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from codebase_to_text.codebase_to_text import CodebaseToText
+from codebase_convert.codebase_convert import CodebaseConvert
 
 
-class TestCodebaseToText(unittest.TestCase):
+class TestCodebaseConvert(unittest.TestCase):
     def setUp(self):
         """Set up test environment with temporary folder structure"""
         self.test_folder_path = tempfile.mkdtemp(prefix="test_codebase_")
@@ -79,7 +79,7 @@ class TestCodebaseToText(unittest.TestCase):
 
     def test_basic_functionality(self):
         """Test basic text generation without exclusions"""
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -96,7 +96,7 @@ class TestCodebaseToText(unittest.TestCase):
 
     def test_exclude_hidden_files(self):
         """Test exclusion of hidden files"""
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -113,7 +113,7 @@ class TestCodebaseToText(unittest.TestCase):
         """Test pattern-based exclusions"""
         exclude_patterns = ["*.log", "*.tmp", "__pycache__/**", ".git/**"]
         
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -141,7 +141,7 @@ class TestCodebaseToText(unittest.TestCase):
         """Test exclusion of specific files"""
         exclude_patterns = ["README.md", "requirements.txt"]
         
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -162,7 +162,7 @@ class TestCodebaseToText(unittest.TestCase):
         """Test exclusion of entire directories"""
         exclude_patterns = ["venv/", "logs/"]
         
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -196,7 +196,7 @@ class TestCodebaseToText(unittest.TestCase):
             f.write("venv/\n")
             f.write("\n")  # Empty line
         
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -227,7 +227,7 @@ class TestCodebaseToText(unittest.TestCase):
         # Also provide CLI exclusions
         cli_excludes = ["*.tmp", "__pycache__/"]
         
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -249,7 +249,7 @@ class TestCodebaseToText(unittest.TestCase):
 
     def test_output_file_generation_txt(self):
         """Test TXT file output generation"""
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -271,7 +271,7 @@ class TestCodebaseToText(unittest.TestCase):
 
     def test_output_file_generation_docx(self):
         """Test DOCX file output generation"""
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_docx,
             output_type="docx",
@@ -295,7 +295,7 @@ class TestCodebaseToText(unittest.TestCase):
         sys.stdout = captured_output
         
         try:
-            code_to_text = CodebaseToText(
+            code_to_text = CodebaseConvert(
                 input_path=self.test_folder_path,
                 output_path=self.output_txt,
                 output_type="txt",
@@ -319,7 +319,7 @@ class TestCodebaseToText(unittest.TestCase):
     def test_invalid_output_type(self):
         """Test error handling for invalid output type"""
         with self.assertRaises(ValueError):
-            code_to_text = CodebaseToText(
+            code_to_text = CodebaseConvert(
                 input_path=self.test_folder_path,
                 output_path="output.xyz",
                 output_type="xyz",
@@ -331,7 +331,7 @@ class TestCodebaseToText(unittest.TestCase):
             
     def test_exclusion_count_tracking(self):
         """Test that exclusion counting works correctly"""
-        code_to_text = CodebaseToText(
+        code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path=self.output_txt,
             output_type="txt",
@@ -357,7 +357,7 @@ class TestPatternMatching(unittest.TestCase):
     
     def setUp(self):
         self.test_folder_path = tempfile.mkdtemp(prefix="test_patterns_")
-        self.code_to_text = CodebaseToText(
+        self.code_to_text = CodebaseConvert(
             input_path=self.test_folder_path,
             output_path="dummy.txt",
             output_type="txt",
