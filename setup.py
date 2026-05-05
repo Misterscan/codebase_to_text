@@ -26,11 +26,11 @@ setup(
     description="A Python package to convert codebase to text",
     license="MIT",
     long_description=open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs/README.md"), "r", encoding="utf-8").read(),
-    download_url="https://github.com/Misterscan/codebase_to_text/releases/download/v2.0.0/codebase_convert-2.0.0.tar.gz",
+    download_url="https://github.com/Misterscan/codebase_convert/releases/download/v2.0.0/codebase_convert-2.0.0.tar.gz",
     long_description_content_type="text/markdown",
     keywords = ["codebase, code conversion, text conversion, folder structure, file contents, text extraction, document conversion, Python package, GitHub repository, command-line tool, code analysis, file parsing, code documentation, formatting preservation, readability"],
     
-    url="https://github.com/Misterscan/codebase_to_text",
+    url="https://github.com/Misterscan/codebase_convert",
     classifiers=[
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",

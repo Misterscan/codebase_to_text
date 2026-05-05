@@ -20,7 +20,7 @@ A powerful Python tool that converts codebases (folder structures with files) in
 
 ### Option 1: Install from GitHub Release (Recommended)
 
-You can download the pre-built package directly from the [GitHub Releases](https://github.com/Misterscan/codebase_to_text/releases) page:
+You can download the pre-built package directly from the [GitHub Releases](https://github.com/Misterscan/codebase_convert/releases) page:
 
 1. Download the `codebase_convert-2.0.0.tar.gz` or `.whl` file from the latest release.
 2. Install it using pip:
@@ -32,8 +32,8 @@ You can download the pre-built package directly from the [GitHub Releases](https
 
 ```bash
 # Clone the repository
-git clone https://github.com/Misterscan/codebase_to_text.git
-cd codebase_to_text
+git clone https://github.com/Misterscan/codebase_convert.git
+cd codebase_convert
 
 # Create virtual environment
 python3 -m venv venv
