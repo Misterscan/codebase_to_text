@@ -665,8 +665,6 @@ class CodebaseConvert:
             folder_structure = self._parse_folder(self.input_path)
             file_contents = self._process_files(self.input_path)
 
-        return self.formatter.combine_text(folder_structure, file_contents)
-
         # Section headers
         return self.formatter.combine_text(folder_structure, file_contents)
 
