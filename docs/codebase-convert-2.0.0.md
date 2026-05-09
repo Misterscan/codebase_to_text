@@ -2,248 +2,34 @@
 
 ```text
 codebase_to_text/
-    app.py
     LICENSE
     requirements.txt
-    setup.cfg
     setup.py
+    app.py
+    setup.cfg
+    converted-repos/
     codebase_convert/
-        codebase_convert.py
         pytest.ini
+        codebase_convert.py
         requirements-dev.txt
         utils/
-            fs_utils.py
-            git_utils.py
             image_utils.py
             utils.py
-    converted-repos/
-    docs/
-        codebase-convert-2.0.0.md
-        README.md
-    templates/
-        index.html
+            fs_utils.py
+            git_utils.py
     tests/
         test_codebase_convert.py
+    docs/
+        README.md
+        codebase-convert-2.0.0.md
+    scratch/
+    templates/
+        index.html
+    data/
+        large_files/
 ```
 
 # File Contents
-
-### File: `app.py`
-
-```python
-import os
-import tempfile
-import shutil
-from pathlib import Path
-from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_file, render_template, after_this_request
-from flasgger import Swagger
-from codebase_convert.codebase_convert import CodebaseConvert
-from codebase_convert.utils.fs_utils import walk_filesystem_generator
-app = Flask(__name__)
-# Configure Flasgger
-swagger_config = {
-    "headers": [],
-    "specs": [
-        {
-            "endpoint": "apispec",
-            "route": "/apispec.json",
-            "rule_filter": lambda rule: True,
-            "model_filter": lambda tag: True,
-        }
-    ],
-    "static_url_path": "/flasgger_static",
-    "swagger_ui": True,
-    "specs_route": "/apidocs/"
-}
-swagger = Swagger(app, config=swagger_config, template={
-    "info": {
-        "title": "Codebase Convert API",
-        "description": "API for converting a codebase (local path or GitHub URL) into text, markdown, or docx.",
-        "version": "2.0.0"
-    }
-})
-@app.route('/api/convert', methods=['POST'])
-def convert():
-    """
-    Convert a codebase to a single text document
-    ---
-    tags:
-      - Conversion
-    consumes:
-      - application/json
-    parameters:
-      - in: body
-        name: body
-        required: true
-        schema:
-          type: object
-          required:
-            - input
-          properties:
-            input:
-              type: string
-              description: GitHub URL or absolute local path to the codebase
-              example: "https://github.com/QaisarRajput/codebase_to_text"
-            output_type:
-              type: string
-              enum: ['txt', 'md', 'docx']
-              default: 'txt'
-              description: The format of the output file
-            exclude:
-              type: array
-              items:
-                type: string
-              description: Patterns to exclude
-              example: ["*.log", "temp/", "**/__pycache__/**"]
-            exclude_hidden:
-              type: boolean
-              default: true
-              description: Exclude hidden files and directories (like .git, .env)
-            ai_optimize:
-              type: boolean
-              default: true
-              description: Optimize the output format for AI processing (strips empty lines, removes binary files, etc.)
-            strip_comments:
-              type: boolean
-              default: false
-              description: Strip single-line comments from the code
-            verbose:
-              type: boolean
-              default: false
-              description: Enable verbose logging output (prints to stdout)
-    responses:
-      200:
-        description: The generated document file
-        content:
-          application/octet-stream: {}
-      400:
-        description: Invalid request parameters
-      500:
-        description: Conversion failed
-    """
-    data = request.json or {}
-    input_path = data.get('input')
-    if not input_path:
-        return jsonify({"error": "The 'input' parameter is required. It must be a valid GitHub URL or local path."}), 400
-    output_type = data.get('output_type', 'txt')
-    if output_type not in ['txt', 'md', 'docx']:
-        return jsonify({"error": "output_type must be txt, md, or docx."}), 400
-    exclude = data.get('exclude', [])
-    exclude_hidden = data.get('exclude_hidden', True)
-    ai_optimize = data.get('ai_optimize', True)
-    strip_comments = data.get('strip_comments', False)
-    verbose = data.get('verbose', False)
-    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
-# Root directory for path traversal checks. 
-# We use the parent directory of the current workspace to allow users to select other local projects.
-WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
-def _safe_input_path(input_path: str) -> bool:
-    # Allow explicit GitHub forms
-    if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
-        return True
-    parsed = urlparse(input_path)
-    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
-    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
-        return False
-    try:
-        target = Path(input_path)
-        # On Windows, a path starting with / or \ is considered absolute but has no drive.
-        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
-        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
-            target = WORKSPACE_DIR / input_path.lstrip('/\\')
-        target = target.resolve()
-        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
-        # and drive letter variations reliably.
-        target_str = str(target).lower()
-        workspace_str = str(WORKSPACE_DIR).lower()
-        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
-    except Exception:
-        return False
-def write_to(self, output_path: str) -> None:
-    repo_path = self._resolve_working_path()
-    with open(output_path, "w", encoding="utf-8") as out:
-        out.write(self._parse_folder(repo_path))
-        out.write("\n--- FILE CONTENTS ---\n\n")
-        for file, root, base in walk_filesystem_generator(
-            repo_path,
-            self._should_exclude,
-            self._handle_directory_exclusion,
-            self._filter_directories_for_processing
-        ):
-            chunk = self._process_single_file(file, root, base)
-            if chunk:
-                out.write(chunk)
-def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
-    if not _safe_input_path(input_path):
-        err = "Path traversal detected or invalid path."
-        return (jsonify({"error": err}), 403) if is_json else (err, 403)
-    tmpdir = tempfile.mkdtemp(prefix="convert_")
-    output_file = os.path.join(tmpdir, f"output.{output_type}")
-    @after_this_request
-    def cleanup(response):
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        return response
-    try:
-        with CodebaseConvert(
-            input_path=input_path,
-            output_path=output_file,
-            output_type=output_type,
-            exclude=exclude,
-            exclude_hidden=exclude_hidden,
-            ai_optimize=ai_optimize,
-            strip_comments=strip_comments,
-            verbose=verbose
-        ) as converter:
-            text_output = converter.get_text()
-            converter.get_file(text_output=text_output)
-            from codebase_convert.utils.utils import estimate_tokens
-            token_count = estimate_tokens(text_output, verbose=verbose) or 0
-            # Send the generated file with token count header
-            response = send_file(
-                output_file,
-                as_attachment=True,
-                download_name=download_filename or f"output.{output_type}"
-            )
-            response.headers['X-Token-Count'] = str(token_count)
-            response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
-            return response
-    except Exception as e:
-        return (jsonify({"error": str(e)}), 500) if is_json else (f"Conversion failed: {str(e)}", 500)
-@app.route('/', methods=['GET'])
-def index():
-    """
-    Render the Graphical Web UI
-    """
-    return render_template('index.html')
-@app.route('/api/form-convert', methods=['POST'])
-def form_convert():
-    """
-    Handle form submissions from the Web UI to download the output.
-    """
-    input_path = request.form.get('input')
-    if not input_path:
-        return "The 'input' parameter is required.", 400
-    output = request.form.get('output')
-    if not output:
-        return "The 'output' parameter is required.", 400
-    output_type = request.form.get('output_type', 'txt')
-    exclude_raw = request.form.get('exclude', '')
-    exclude = [e.strip() for e in exclude_raw.split(',')] if exclude_raw else []
-    # Checkboxes only send data if checked
-    exclude_hidden = request.form.get('exclude_hidden') == 'on'
-    verbose = request.form.get('verbose') == 'on'
-    no_ai_optimize = request.form.get('no_ai_optimize') == 'on'
-    ai_optimize = not no_ai_optimize
-    strip_comments = request.form.get('strip_comments') == 'on'
-    download_filename = output
-    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
-if __name__ == "__main__":
-    host = os.environ.get("FLASK_HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "5003"))
-    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(debug=debug, host=host, port=port)
-```
 
 ### File: `LICENSE`
 
@@ -431,14 +217,6 @@ flask
 flasgger
 ```
 
-### File: `setup.cfg`
-
-```
-# Inside of setup.cfg
-[metadata]
-description-file = README.md
-```
-
 ### File: `setup.py`
 
 ```python
@@ -484,7 +262,226 @@ setup(
 )
 ```
 
-### File: `codebase_convert\codebase_convert.py`
+### File: `app.py`
+
+```python
+import os
+import tempfile
+import shutil
+from pathlib import Path
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request
+from flasgger import Swagger
+from codebase_convert.codebase_convert import CodebaseConvert
+from codebase_convert.utils.fs_utils import walk_filesystem_generator
+app = Flask(__name__)
+# Configure Flasgger
+swagger_config = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": "apispec",
+            "route": "/apispec.json",
+            "rule_filter": lambda rule: True,
+            "model_filter": lambda tag: True,
+        }
+    ],
+    "static_url_path": "/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/apidocs/"
+}
+swagger = Swagger(app, config=swagger_config, template={
+    "info": {
+        "title": "Codebase Convert API",
+        "description": "API for converting a codebase (local path or GitHub URL) into text, markdown, or docx.",
+        "version": "2.0.0"
+    }
+})
+@app.route('/api/convert', methods=['POST'])
+def convert():
+    """
+    Convert a codebase to a single text document
+    ---
+    tags:
+      - Conversion
+    consumes:
+      - application/json
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - input
+          properties:
+            input:
+              type: string
+              description: GitHub URL or absolute local path to the codebase
+              example: "https://github.com/QaisarRajput/codebase_to_text"
+            output_type:
+              type: string
+              enum: ['txt', 'md', 'docx']
+              default: 'txt'
+              description: The format of the output file
+            exclude:
+              type: array
+              items:
+                type: string
+              description: Patterns to exclude
+              example: ["*.log", "temp/", "**/__pycache__/**"]
+            exclude_hidden:
+              type: boolean
+              default: true
+              description: Exclude hidden files and directories (like .git, .env)
+            ai_optimize:
+              type: boolean
+              default: true
+              description: Optimize the output format for AI processing (strips empty lines, removes binary files, etc.)
+            strip_comments:
+              type: boolean
+              default: false
+              description: Strip single-line comments from the code
+            verbose:
+              type: boolean
+              default: false
+              description: Enable verbose logging output (prints to stdout)
+    responses:
+      200:
+        description: The generated document file
+        content:
+          application/octet-stream: {}
+      400:
+        description: Invalid request parameters
+      500:
+        description: Conversion failed
+    """
+    data = request.json or {}
+    input_path = data.get('input')
+    if not input_path:
+        return jsonify({"error": "The 'input' parameter is required. It must be a valid GitHub URL or local path."}), 400
+    output_type = data.get('output_type', 'txt')
+    if output_type not in ['txt', 'md', 'docx']:
+        return jsonify({"error": "output_type must be txt, md, or docx."}), 400
+    exclude = data.get('exclude', [])
+    exclude_hidden = data.get('exclude_hidden', True)
+    ai_optimize = data.get('ai_optimize', True)
+    strip_comments = data.get('strip_comments', False)
+    verbose = data.get('verbose', False)
+    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
+# Root directory for path traversal checks. 
+# We use the parent directory of the current workspace to allow users to select other local projects.
+WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
+def _safe_input_path(input_path: str) -> bool:
+    # Allow explicit GitHub forms
+    if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
+        return True
+    parsed = urlparse(input_path)
+    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
+    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
+        return False
+    try:
+        target = Path(input_path)
+        # On Windows, a path starting with / or \ is considered absolute but has no drive.
+        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
+        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
+            target = WORKSPACE_DIR / input_path.lstrip('/\\')
+        target = target.resolve()
+        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
+        # and drive letter variations reliably.
+        target_str = str(target).lower()
+        workspace_str = str(WORKSPACE_DIR).lower()
+        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
+    except Exception:
+        return False
+def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
+    if not _safe_input_path(input_path):
+        err = "Path traversal detected or invalid path."
+        return (jsonify({"error": err}), 403) if is_json else (err, 403)
+    tmpdir = tempfile.mkdtemp(prefix="convert_")
+    output_file = os.path.join(tmpdir, f"output.{output_type}")
+    @after_this_request
+    def cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
+    try:
+        with CodebaseConvert(
+            input_path=input_path,
+            output_path=output_file,
+            output_type=output_type,
+            exclude=exclude,
+            exclude_hidden=exclude_hidden,
+            ai_optimize=ai_optimize,
+            strip_comments=strip_comments,
+            verbose=verbose
+        ) as converter:
+            text_output = converter.get_text()
+            converter.get_file(text_output=text_output)
+            from codebase_convert.utils.utils import estimate_tokens
+            token_count = estimate_tokens(text_output, verbose=verbose) or 0
+            # Send the generated file with token count header
+            response = send_file(
+                output_file,
+                as_attachment=True,
+                download_name=download_filename or f"output.{output_type}"
+            )
+            response.headers['X-Token-Count'] = str(token_count)
+            response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
+            return response
+    except Exception as e:
+        return (jsonify({"error": str(e)}), 500) if is_json else (f"Conversion failed: {str(e)}", 500)
+@app.route('/', methods=['GET'])
+def index():
+    """
+    Render the Graphical Web UI
+    """
+    return render_template('index.html')
+@app.route('/api/form-convert', methods=['POST'])
+def form_convert():
+    """
+    Handle form submissions from the Web UI to download the output.
+    """
+    input_path = request.form.get('input')
+    if not input_path:
+        return "The 'input' parameter is required.", 400
+    output = request.form.get('output')
+    if not output:
+        return "The 'output' parameter is required.", 400
+    output_type = request.form.get('output_type', 'txt')
+    exclude_raw = request.form.get('exclude', '')
+    exclude = [e.strip() for e in exclude_raw.split(',')] if exclude_raw else []
+    # Checkboxes only send data if checked
+    exclude_hidden = request.form.get('exclude_hidden') == 'on'
+    verbose = request.form.get('verbose') == 'on'
+    no_ai_optimize = request.form.get('no_ai_optimize') == 'on'
+    ai_optimize = not no_ai_optimize
+    strip_comments = request.form.get('strip_comments') == 'on'
+    download_filename = output
+    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5003"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host=host, port=port)
+```
+
+### File: `setup.cfg`
+
+```
+# Inside of setup.cfg
+[metadata]
+description-file = README.md
+```
+
+### File: `codebase_convert/pytest.ini`
+
+```
+[pytest]
+testpaths = tests
+addopts = -v
+```
+
+### File: `codebase_convert/codebase_convert.py`
 
 ```python
 """
@@ -683,12 +680,10 @@ class CodebaseConvert:
         self._load_gitignore()
         if self.verbose and self.exclude_patterns:
             logger.debug(f"Active exclusion patterns: {sorted(self.exclude_patterns)}")
-    def _load_gitignore(self):
+    def _load_gitignore(self, base_path: Optional[str] = None):
         """Load patterns from local .gitignore file if present."""
-        gitignore_path = os.path.join(
-            self.input_path if not self.is_github_repo() else '.',
-            '.gitignore'
-        )
+        search_path = base_path if base_path else (self.input_path if not self.is_github_repo() else '.')
+        gitignore_path = os.path.join(search_path, '.gitignore')
         if not os.path.exists(gitignore_path):
             return
         try:
@@ -739,12 +734,10 @@ class CodebaseConvert:
             }
             default_excludes.update(media_excludes)
         self.exclude_patterns.update(default_excludes)
-    def _add_file_patterns(self):
+    def _add_file_patterns(self, base_path: Optional[str] = None):
         """Load patterns from a .exclude file if present."""
-        exclude_file_path = os.path.join(
-            self.input_path if not self.is_github_repo() else '.',
-            '.exclude'
-        )
+        search_path = base_path if base_path else (self.input_path if not self.is_github_repo() else '.')
+        exclude_file_path = os.path.join(search_path, '.exclude')
         if not os.path.exists(exclude_file_path):
             return
         try:
@@ -1108,21 +1101,104 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-### File: `codebase_convert\pytest.ini`
-
-```
-[pytest]
-testpaths = tests
-addopts = -v
-```
-
-### File: `codebase_convert\requirements-dev.txt`
+### File: `codebase_convert/requirements-dev.txt`
 
 ```
 pytest
 ```
 
-### File: `codebase_convert\utils\fs_utils.py`
+### File: `codebase_convert/utils/image_utils.py`
+
+```python
+import io
+import logging
+import os
+from typing import Optional, Tuple
+from PIL import Image, ImageFile, UnidentifiedImageError
+logger = logging.getLogger("codebase_convert")
+IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".ico",
+    ".webp",
+}
+MAX_IMAGE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_BYTES", "5000000"))
+MAX_IMAGE_PIXELS = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_PIXELS", "20000000"))
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+ImageFile.LOAD_TRUNCATED_IMAGES = False
+def is_image_file(file_path: str) -> bool:
+    """Check if the file is a supported raster image based on extension."""
+    return os.path.splitext(file_path)[1].lower() in IMAGE_EXTENSIONS
+def compress_image(
+    file_path: str,
+    max_size: Tuple[int, int] = (1024, 1024),
+    quality: int = 70,
+    verbose: bool = False,
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """Resize and compress image for smaller blob size."""
+    try:
+        if os.path.getsize(file_path) > MAX_IMAGE_BYTES:
+            if verbose:
+                logger.warning(f"Image too large to process safely: {file_path}")
+            return None, None
+        with Image.open(file_path) as img:
+            img.verify()
+        with Image.open(file_path) as img:
+            img.load()
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                if verbose:
+                    logger.warning(f"Image pixel count too large to process safely: {file_path}")
+                return None, None
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode in ("RGBA", "LA"):
+                    alpha = img.getchannel("A")
+                    background.paste(img.convert("RGBA"), mask=alpha)
+                else:
+                    background.paste(img.convert("RGB"))
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            if img.width > max_size[0] or img.height > max_size[1]:
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format="JPEG", quality=quality, optimize=True)
+            return output.getvalue(), "image/jpeg"
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as e:
+        if verbose:
+            logger.warning(f"Compression failed for {file_path}: {e}")
+        return None, None
+```
+
+### File: `codebase_convert/utils/utils.py`
+
+```python
+import logging
+from typing import Optional
+try:
+    import tiktoken
+    HAS_TIKTOKEN = True
+except ImportError:
+    HAS_TIKTOKEN = False
+logger = logging.getLogger('codebase_convert')
+def estimate_tokens(text: str, verbose: bool = False) -> Optional[int]:
+    '''Estimate token count for LLM usage using tiktoken'''
+    if not HAS_TIKTOKEN:
+        return None
+    try:
+        enc = tiktoken.get_encoding('cl100k_base')
+        return len(enc.encode(text, disallowed_special=()))
+    except Exception as e:
+        if verbose:
+            logger.warning(f'Could not estimate tokens: {e}')
+        return None
+```
+
+### File: `codebase_convert/utils/fs_utils.py`
 
 ```python
 import os
@@ -1173,7 +1249,7 @@ def process_files_with_strategy(is_github_repo: bool, path: str, should_exclude:
     return content_pieces, processed_count
 ```
 
-### File: `codebase_convert\utils\git_utils.py`
+### File: `codebase_convert/utils/git_utils.py`
 
 ```python
 import atexit
@@ -1253,344 +1329,721 @@ def clone_github_repo(repo_url: str, verbose: bool = False) -> str:
         raise
 ```
 
-### File: `codebase_convert\utils\image_utils.py`
+### File: `tests/test_codebase_convert.py`
 
 ```python
-import io
-import logging
+import unittest
 import os
-from typing import Optional, Tuple
-from PIL import Image, ImageFile, UnidentifiedImageError
-logger = logging.getLogger("codebase_convert")
-IMAGE_EXTENSIONS = {
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".bmp",
-    ".tiff",
-    ".ico",
-    ".webp",
-}
-MAX_IMAGE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_BYTES", "5000000"))
-MAX_IMAGE_PIXELS = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_PIXELS", "20000000"))
-Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
-ImageFile.LOAD_TRUNCATED_IMAGES = False
-def is_image_file(file_path: str) -> bool:
-    """Check if the file is a supported raster image based on extension."""
-    return os.path.splitext(file_path)[1].lower() in IMAGE_EXTENSIONS
-def compress_image(
-    file_path: str,
-    max_size: Tuple[int, int] = (1024, 1024),
-    quality: int = 70,
-    verbose: bool = False,
-) -> Tuple[Optional[bytes], Optional[str]]:
-    """Resize and compress image for smaller blob size."""
-    try:
-        if os.path.getsize(file_path) > MAX_IMAGE_BYTES:
-            if verbose:
-                logger.warning(f"Image too large to process safely: {file_path}")
-            return None, None
-        with Image.open(file_path) as img:
-            img.verify()
-        with Image.open(file_path) as img:
-            img.load()
-            if img.width * img.height > MAX_IMAGE_PIXELS:
-                if verbose:
-                    logger.warning(f"Image pixel count too large to process safely: {file_path}")
-                return None, None
-            if img.mode in ("RGBA", "LA", "P"):
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode in ("RGBA", "LA"):
-                    alpha = img.getchannel("A")
-                    background.paste(img.convert("RGBA"), mask=alpha)
-                else:
-                    background.paste(img.convert("RGB"))
-                img = background
-            elif img.mode != "RGB":
-                img = img.convert("RGB")
-            if img.width > max_size[0] or img.height > max_size[1]:
-                img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            output = io.BytesIO()
-            img.save(output, format="JPEG", quality=quality, optimize=True)
-            return output.getvalue(), "image/jpeg"
-    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as e:
-        if verbose:
-            logger.warning(f"Compression failed for {file_path}: {e}")
-        return None, None
+import sys
+import tempfile
+import shutil
+from pathlib import Path
+# Add parent directory to path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from codebase_convert.codebase_convert import CodebaseConvert
+class TestCodebaseConvert(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment with temporary folder structure"""
+        self.test_folder_path = tempfile.mkdtemp(prefix="test_codebase_")
+        # Create test folder structure
+        self._create_test_structure()
+        # Output paths for testing
+        self.output_txt = os.path.join(self.test_folder_path, "output.txt")
+        self.output_docx = os.path.join(self.test_folder_path, "output.docx")
+    def _create_test_structure(self):
+        """Create a complex test folder structure"""
+        base = self.test_folder_path
+        # Create main files
+        with open(os.path.join(base, "main.py"), "w") as f:
+            f.write("print('Hello World')")
+        with open(os.path.join(base, "README.md"), "w") as f:
+            f.write("# Test Project\nThis is a test.")
+        with open(os.path.join(base, "requirements.txt"), "w") as f:
+            f.write("flask>=2.0.0\nflasgger>=0.9.5\npython-docx>=0.8.11\nPillow>=8.0.0\ngitpython>=3.1.0\npathspec>=0.9.0\ntiktoken>=0.3.0")
+        # Create subdirectories
+        os.makedirs(os.path.join(base, "src"), exist_ok=True)
+        os.makedirs(os.path.join(base, "tests"), exist_ok=True)
+        os.makedirs(os.path.join(base, "__pycache__"), exist_ok=True)
+        os.makedirs(os.path.join(base, ".git"), exist_ok=True)
+        os.makedirs(os.path.join(base, "venv", "lib"), exist_ok=True)
+        os.makedirs(os.path.join(base, "logs"), exist_ok=True)
+        # Create files in subdirectories
+        with open(os.path.join(base, "src", "app.py"), "w") as f:
+            f.write("def main():\n    pass")
+        with open(os.path.join(base, "src", "utils.py"), "w") as f:
+            f.write("def helper():\n    return True")
+        with open(os.path.join(base, "tests", "test_app.py"), "w") as f:
+            f.write("import unittest\n\nclass TestApp(unittest.TestCase):\n    pass")
+        # Create files that should be excluded by default
+        with open(os.path.join(base, "__pycache__", "app.cpython-39.pyc"), "w") as f:
+            f.write("binary content")
+        with open(os.path.join(base, ".git", "config"), "w") as f:
+            f.write("[core]\nrepositoryformatversion = 0")
+        with open(os.path.join(base, "venv", "lib", "python3.9"), "w") as f:
+            f.write("virtual env file")
+        with open(os.path.join(base, "logs", "app.log"), "w") as f:
+            f.write("2023-01-01 10:00:00 INFO Application started")
+        with open(os.path.join(base, "temp.tmp"), "w") as f:
+            f.write("temporary content")
+        # Create hidden files
+        with open(os.path.join(base, ".gitignore"), "w") as f:
+            f.write("*.pyc\n__pycache__/\n.env")
+        with open(os.path.join(base, ".env"), "w") as f:
+            f.write("SECRET_KEY=test123")
+    def test_basic_functionality(self):
+        """Test basic text generation without exclusions"""
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        self.assertIn("Folder Structure", text)
+        self.assertIn("File Contents", text)
+        self.assertIn("main.py", text)
+        self.assertIn("Hello World", text)
+    def test_exclude_hidden_files(self):
+        """Test exclusion of hidden files"""
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=True,
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        self.assertNotIn(".gitignore", text)
+        self.assertNotIn(".env", text)
+        self.assertIn("main.py", text)  # Regular files should still be included
+    def test_exclude_patterns(self):
+        """Test pattern-based exclusions"""
+        exclude_patterns = ["*.log", "*.tmp", "__pycache__/**", ".git/**"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude log and tmp files from folder structure
+        self.assertNotIn("app.log", folder_structure_section)
+        self.assertNotIn("temp.tmp", folder_structure_section)
+        self.assertNotIn("__pycache__/", folder_structure_section)
+        self.assertNotIn(".git/", folder_structure_section)
+        # Should include normal files in folder structure
+        self.assertIn("main.py", folder_structure_section)
+        self.assertIn("src/", folder_structure_section)
+    def test_exclude_specific_files(self):
+        """Test exclusion of specific files"""
+        exclude_patterns = ["README.md", "requirements.txt"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+          # Should exclude specified files
+        self.assertNotIn("README.md", text)
+        self.assertNotIn("requirements.txt", text)
+        # Should include other files
+        self.assertIn("main.py", text)
+    def test_exclude_directories(self):
+        """Test exclusion of entire directories"""
+        exclude_patterns = ["venv/", "logs/"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude specified directories from folder structure
+        self.assertNotIn("venv/", folder_structure_section)
+        self.assertNotIn("logs/", folder_structure_section)
+        # Should include other directories
+        self.assertIn("src/", folder_structure_section)
+        self.assertIn("tests/", folder_structure_section)
+    def test_exclude_file_creation(self):
+        """Test loading exclusion patterns from .exclude file"""
+        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
+        # Create .exclude file
+        with open(exclude_file_path, "w") as f:
+            f.write("# This is a comment\n")
+            f.write("*.log\n")
+            f.write("temp.tmp\n")
+            f.write("venv/\n")
+            f.write("\n")  # Empty line
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude files listed in .exclude file from folder structure
+        self.assertNotIn("app.log", folder_structure_section)
+        self.assertNotIn("temp.tmp", folder_structure_section)
+        self.assertNotIn("venv/", folder_structure_section)
+    def test_combined_exclusions(self):
+        """Test combination of CLI args and .exclude file"""
+        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
+        # Create .exclude file
+        with open(exclude_file_path, "w") as f:
+            f.write("*.log\n")
+            f.write("venv/\n")
+        # Also provide CLI exclusions
+        cli_excludes = ["*.tmp", "__pycache__/"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=cli_excludes,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude files from both sources from folder structure
+        self.assertNotIn("app.log", folder_structure_section)  # From .exclude file
+        self.assertNotIn("venv/", folder_structure_section)    # From .exclude file
+        self.assertNotIn("temp.tmp", folder_structure_section) # From CLI
+        self.assertNotIn("__pycache__/", folder_structure_section) # From CLI
+    def test_output_file_generation_txt(self):
+        """Test TXT file output generation"""
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=["*.log", "*.tmp"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
+            code_to_text.get_file()
+        # Check if output file was created
+        self.assertTrue(os.path.exists(self.output_txt))
+        # Check content
+        with open(self.output_txt, "r", encoding="utf-8") as f:
+            content = f.read()
+            self.assertIn("Folder Structure", content)
+            self.assertIn("main.py", content)
+    def test_output_file_generation_docx(self):
+        """Test DOCX file output generation"""
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_docx,
+            output_type="docx",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=["*.log", "*.tmp"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
+            code_to_text.get_file()
+        # Check if output file was created
+        self.assertTrue(os.path.exists(self.output_docx))
+    def test_verbose_mode(self):
+        """Test verbose output mode"""
+        with self.assertLogs('codebase_convert', level='DEBUG') as cm:
+            with CodebaseConvert(
+                input_path=self.test_folder_path,
+                output_path=self.output_txt,
+                output_type="txt",
+                verbose=True,
+                exclude_hidden=False,
+                exclude=["*.log"],
+                ai_optimize=False,
+                strip_comments=False
+            ) as code_to_text:
+                code_to_text.get_file()
+            output = "\\n".join(cm.output)
+            # Should contain verbose messages
+            self.assertIn("Active exclusion patterns", output)
+            self.assertIn("Processing:", output)
+    def test_invalid_output_type(self):
+        """Test error handling for invalid output type"""
+        with self.assertRaises(ValueError):
+            with CodebaseConvert(
+                input_path=self.test_folder_path,
+                output_path="output.xyz",
+                output_type="xyz",
+                verbose=False,
+                exclude_hidden=False,
+                exclude=[],
+                ai_optimize=False,
+                strip_comments=False
+            ) as code_to_text:
+                code_to_text.get_file()    
+    def test_exclusion_count_tracking(self):
+        """Test that exclusion counting works correctly"""
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=True,  # Need verbose mode for this test to work properly
+            exclude_hidden=False,
+            exclude=["*.log", "*.tmp", "__pycache__/**"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
+            # Generate text to trigger exclusion counting
+            code_to_text.get_text()
+            # Should have excluded some files
+            self.assertGreater(code_to_text.excluded_files_count, 0)
+    def test_ai_optimize(self):
+        """Test the new ai_optimize feature strips whitespace"""
+        file_path = os.path.join(self.test_folder_path, "ai_test.py")
+        with open(file_path, "w") as f:
+            f.write("def func():\n    pass\n\n\n\n# test")
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            ai_optimize=True,
+            strip_comments=False
+        ) as code_to_text:
+            text = code_to_text.get_text()
+            self.assertIn("<file path", text) # Check strategy pattern applied ai framing
+    def test_strip_comments(self):
+        """Test the new strip_comments feature removed comments"""
+        file_path = os.path.join(self.test_folder_path, "comment_test.py")
+        with open(file_path, "w") as f:
+            f.write("# this is a comment\ndef func():\n    pass")
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            ai_optimize=True,
+            strip_comments=True
+        ) as code_to_text:
+            text = code_to_text.get_text()
+            self.assertNotIn("this is a comment", text)
+    def tearDown(self):
+        """Clean up test environment"""
+        if os.path.exists(self.test_folder_path):
+            shutil.rmtree(self.test_folder_path)
+class TestPatternMatching(unittest.TestCase):
+    """Test exclusion pattern matching specifically"""
+    def setUp(self):
+        self.test_folder_path = tempfile.mkdtemp(prefix="test_patterns_")
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path="dummy.txt",
+            output_type="txt",
+            exclude=[]
+        ) as self.code_to_text:
+            pass # just used to initialize it
+        # Manually reconstruct the object since `with` block closes it for testing internals:
+        self.code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path="dummy.txt",
+            output_type="txt",
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+    def test_wildcard_patterns(self):
+        """Test wildcard pattern matching"""
+        self.code_to_text.exclude_patterns = {"*.py", "*.log"}
+        # Should match
+        self.assertTrue(self.code_to_text._should_exclude("test.py", self.test_folder_path))
+        self.assertTrue(self.code_to_text._should_exclude("app.log", self.test_folder_path))
+        # Should not match
+        self.assertFalse(self.code_to_text._should_exclude("test.txt", self.test_folder_path))
+        self.assertFalse(self.code_to_text._should_exclude("README.md", self.test_folder_path))
+    def test_directory_patterns(self):
+        """Test directory pattern matching"""
+        self.code_to_text.exclude_patterns = {"__pycache__/", "node_modules/"}
+        # Create test directories
+        pycache_dir = os.path.join(self.test_folder_path, "__pycache__")
+        os.makedirs(pycache_dir, exist_ok=True)
+        # Should match directories
+        self.assertTrue(self.code_to_text._should_exclude(pycache_dir, self.test_folder_path))
+    def test_recursive_patterns(self):
+        """Test recursive wildcard patterns"""
+        self.code_to_text.exclude_patterns = {"**/__pycache__/**", "**/node_modules/**"}
+        # Create nested test structure
+        nested_pycache = os.path.join(self.test_folder_path, "src", "utils", "__pycache__", "file.pyc")
+        os.makedirs(os.path.dirname(nested_pycache), exist_ok=True)
+        # Should match nested paths
+        self.assertTrue(self.code_to_text._should_exclude(nested_pycache, self.test_folder_path))
+    def tearDown(self):
+        """Clean up test environment"""
+        if os.path.exists(self.test_folder_path):
+            shutil.rmtree(self.test_folder_path)
+class TestDocxImage(unittest.TestCase):
+    def test_docx_with_image(self):
+        import tempfile
+        import os
+        import base64
+        from docx import Document
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Write a dummy 1x1 PNG image
+            img_path = os.path.join(temp_dir, "dummy.png")
+            png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAC0lEQVQIW2NgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII="
+            with open(img_path, "wb") as f:
+                f.write(base64.b64decode(png_data))
+            # Create a new DOCX document and add a picture
+            doc = Document()
+            doc.add_paragraph("Testing DOCX image inclusion.")
+            doc.add_picture(img_path)
+            # Save the document
+            doc_path = os.path.join(temp_dir, "test.docx")
+            doc.save(doc_path)
+            # Reload the document and assert that it contains an inline image
+            new_doc = Document(doc_path)
+            self.assertGreater(len(new_doc.inline_shapes), 0, "Document should contain at least one inline image.")
+class TestImageCompression(unittest.TestCase):
+    def test_image_compression(self):
+        """Test images that compress into .txt format correctly"""
+        import tempfile
+        import os
+        import base64
+        from PIL import Image
+        import io
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a simple 100x100 red PNG image
+            img = Image.new('RGB', (100, 100), color='red')
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format='PNG')
+            img_data = img_bytes.getvalue()
+            # Write the image to a file
+            img_path = os.path.join(temp_dir, "test_image.png")
+            with open(img_path, "wb") as f:
+                f.write(img_data)
+            # Create a CodebaseConvert instance
+            code_to_text = CodebaseConvert(
+                input_path=temp_dir,
+                output_path="dummy.txt",
+                output_type="txt",
+                verbose=False,
+                exclude_hidden=False,
+                exclude=[],
+                ai_optimize=False,
+                strip_comments=False
+            )
+            # Test compression to TXT format
+            from codebase_convert.utils.image_utils import compress_image
+            blob_bytes, mime_type = compress_image(img_path)
+            self.assertIsNotNone(blob_bytes)
+            self.assertEqual(mime_type, "image/jpeg")
+            self.assertTrue(len(blob_bytes) > 0, "Compressed bytes should not be empty.")
+if __name__ == "__main__":
+    # Run specific test class or all tests
+    unittest.main(verbosity=2)
 ```
 
-### File: `codebase_convert\utils\utils.py`
+### File: `docs/README.md`
 
+```markdown
+# Codebase Convert
+A powerful Python tool that converts codebases (folder structures with files) into a single text file or Microsoft Word document (.docx), while preserving folder structure and file contents. Perfect for AI/LLM processing, documentation generation, and code analysis.
+# Wanna see an example? This repo was converted to Markdown [here](./codebase-convert-2.0.0.md).
+## ✨ Features
+- **Multi-source input**: Local directories and GitHub repositories
+- **Flexible output**: Text files (.txt), Markdown (.md), and Microsoft Word documents (.docx)
+- **AI Optimized Output**: Formatting and compression designed explicitly for LLM contexts (enabled by default)
+- **Token Estimation**: Automatically calculates rough token counts string size using `tiktoken` to ensure your prompt fits into context windows.
+- **Image Support**: Automatically embeds codebase images into Word documents or Base64 encodes them for text output
+- **Smart exclusions**: Automatically respects local `.gitignore` files, along with advanced pattern matching for files and directories
+- **Performance optimized**: Single-threaded generator traversal for local paths avoids thread overhead; multithreading is reserved for remote GitHub I/O
+- **Comprehensive logging**: Detailed verbose mode for log transparency
+- **Encoding support**: Handles various file encodings gracefully
+## 🚀 Installation
+### Option 1: Install from GitHub Release (Recommended)
+You can download the pre-built package directly from the [GitHub Releases](https://github.com/Misterscan/codebase_convert/releases) page:
+1. Download the `codebase_convert-2.0.0.tar.gz` or `.whl` file from the latest release.
+2. Install it using pip:
+   ```bash
+   pip install codebase_convert-2.0.0.tar.gz
+   ```
+### Option 2: Install from Source
+```bash
+# Clone the repository
+git clone https://github.com/Misterscan/codebase_convert.git
+cd codebase_convert
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+# Install the package
+pip install -e .
+```
+## 📖 Usage
+### Web Interface & API
+You can run the web application locally to access a graphical user interface (GUI) and interactive Swagger API documentation. 
+```bash
+# Start the web interface
+python app.py
+```
+* **Graphical Web UI**: Open [http://127.0.0.1:5003](http://127.0.0.1:5003) to use the beautifully styled Catppuccin web interface. Just paste your codebase path/URL, set your options, and download your converted file! Once your download completes, you'll see a new **Ask AI for a Code Review** section with pre-configured, comprehensive review prompts tailored for models like ChatGPT, Claude, Gemini, DeepSeek, Mistral, Perplexity, Grok, Meta AI, HuggingChat, and Poe.
+* **Swagger API Docs**: Open [http://127.0.0.1:5003/apidocs/](http://127.0.0.1:5003/apidocs/) to view the interactive API playground.
+### Command Line Interface (CLI)
+#### Basic Usage
+```bash
+cb --input "path_or_github_url" --output "output_path" --output_type "txt"
+```
+#### Advanced Usage with Exclusions and Settings
+```bash
+# Exclude specific patterns
+cb --input "./my_project" --output "output.md" --output_type "md" --exclude "*.log,temp/,**/__pycache__/**"
+# Disable AI Optimization (keeps empty lines, raw formats)
+cb --input "./my_project" --output "output.docx" --output_type "docx" --no_ai_optimize
+# Strip Comments
+cb --input "./my_project" --output "output.txt" --output_type "txt" --strip_comments
+# Verbose logging output
+cb --input "./my_project" --output "output.txt" --output_type "txt" --verbose
+```
+### Python API
 ```python
-import logging
-from typing import Optional
-try:
-    import tiktoken
-    HAS_TIKTOKEN = True
-except ImportError:
-    HAS_TIKTOKEN = False
-logger = logging.getLogger('codebase_convert')
-def estimate_tokens(text: str, verbose: bool = False) -> Optional[int]:
-    '''Estimate token count for LLM usage using tiktoken'''
-    if not HAS_TIKTOKEN:
-        return None
-    try:
-        enc = tiktoken.get_encoding('cl100k_base')
-        return len(enc.encode(text, disallowed_special=()))
-    except Exception as e:
-        if verbose:
-            logger.warning(f'Could not estimate tokens: {e}')
-        return None
+from codebase_convert import CodebaseConvert
+# Basic usage — use as a context manager to ensure safe resource cleanup
+with CodebaseConvert(
+    input_path="path_or_github_url",
+    output_path="output_path",
+    output_type="md"
+) as converter:
+    converter.get_file()
+# Advanced usage with exclusions and AI optimization
+with CodebaseConvert(
+    input_path="./my_project",
+    output_path="./output.md",
+    output_type="md",
+    exclude=["*.log", "temp/", "**/__pycache__/**"],
+    exclude_hidden=True,
+    ai_optimize=True,  # Defaults to True. Set to False to retain raw whitespace formats
+    strip_comments=False, # Defaults to False. Set to True to remove all prefixed comments
+    verbose=True
+) as converter:
+    converter.get_file()
+    # Get text content without saving to file
+    text_content = converter.get_text()
+    print(text_content)
+# Token estimation (uses cl100k_base encoding via tiktoken)
+from codebase_convert.utils import estimate_tokens
+token_count = estimate_tokens(text_content)
+print(f"Estimated tokens: {token_count:,}")
+```
+## 🎯 Exclusion Patterns
+The tool supports powerful exclusion patterns to filter out unwanted files and directories:
+### Pattern Types
+1. **Exact filename**: `README.md`, `config.yaml`
+2. **Wildcard patterns**: `*.log`, `*.tmp`, `test_*`
+3. **Directory patterns**: `__pycache__/`, `.git/`, `node_modules/`
+4. **Recursive patterns**: `**/__pycache__/**`, `**/node_modules/**`
+5. **Path-based patterns**: `src/temp/`, `docs/build/`
+### Exclusion Sources
+1. **`.gitignore`**: The tool automatically attempts to read `.gitignore` at the root path and applies its rules.
+2. **CLI Arguments**: Use `--exclude` flag (can be used multiple times)
+3. **`.exclude` file**: Place in your project root (see example below)
+4. **Default patterns**: Common files/folders are excluded automatically
+### Default Exclusions
+The tool automatically excludes common development files:
+- `.git/`, `__pycache__/`, `*.pyc`, `*.pyo`
+- `node_modules/`, `.venv/`, `venv/`, `env/`
+- `*.log`, `*.tmp`, `.DS_Store`
+- `.pytest_cache/`, `build/`, `dist/`
+When `ai_optimize` is enabled (default), various media and binary files (`*.mp3`, `*.pdf`, `*.ttf`, etc.) are also automatically excluded to keep outputs clean.
+## 📝 .exclude File Example
+Create a `.exclude` file in your project root:
+```bash
+# .exclude file - Patterns for files/folders to exclude
+# Version control
+.git/
+.gitignore
+# Python
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+# Node.js
+node_modules/
+*.log
+# IDE files
+.vscode/
+.idea/
+# Project specific
+config/secrets.yaml
+data/large_files/
+```
+## 🔧 CLI Parameters
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `--input` | Input path (local folder or GitHub URL) | `./my_project` or `https://github.com/user/repo` |
+| `--output` | Output file path | `./output.txt` |
+| `--output_type` | Output format (`txt` or `docx`) | `txt` |
+| `--exclude` | Exclusion patterns (repeatable) | `--exclude "*.log" --exclude "temp/"` |
+| `--exclude_hidden` | Exclude hidden files/folders | Flag (no value) |
+| `--no_ai_optimize` | Disable AI-optimized output | Flag (no value) |
+| `--strip_comments` | Strip comments from code | Flag (no value) |
+| `--verbose` | Enable detailed logging | Flag (no value) |
+## 💡 Examples
+### Convert Local Project
+```bash
+# Basic conversion
+cb --input "~/projects/my_app" --output "my_app_code.md" --output_type "md"
+# With custom exclusions
+cb --input "~/projects/my_app" --output "my_app_code.txt" --output_type "txt" --exclude "*.log,build/,dist/" --verbose
+```
+### Convert GitHub Repository
+```bash
+# Public repository
+cb --input "https://github.com/username/repo" --output "repo_analysis.docx" --output_type "docx"
+# With exclusions for cleaner output
+cb --input "https://github.com/username/repo" --output "repo_clean.txt" --output_type "txt" --exclude "*.md,docs/,examples/"
+```
+### Python Integration
+```python
+# Analyze a codebase programmatically
+from codebase_convert import CodebaseConvert
+def analyze_codebase(project_path):
+    with CodebaseConvert(
+        input_path=project_path,
+        output_path="analysis.txt",
+        output_type="txt",
+        exclude=["*.log", "test/", "**/__pycache__/**"],
+        ai_optimize=True,
+        strip_comments=False,
+        verbose=True
+    ) as converter:
+        # Get the content
+        content = converter.get_text()
+    # Process with your preferred LLM/AI tool
+    # analysis_result = your_ai_tool.analyze(content)
+    return content
+# Usage
+code_content = analyze_codebase("./my_project")
+```
+## 🎯 Use Cases
+- **AI/LLM Training**: Prepare codebases for language model training
+- **Code Review**: Generate comprehensive code overviews for review
+- **Documentation**: Create single-file documentation from projects
+- **Analysis**: Feed entire codebases to AI tools for analysis
+- **Migration**: Document legacy codebases before migration
+- **Learning**: Study open-source projects more effectively
+## 🏗️ Architecture
+The package is structured into focused, single-responsibility services:
+```
+codebase_to_text/
+├── app.py                          # Flask web server — REST API + form routes
+├── setup.py                        # Package build configuration
+├── requirements.txt                # Runtime dependencies
+├── templates/
+│   └── index.html                  # Catppuccin web UI
+├── tests/
+│   └── test_codebase_convert.py    # Full unit test suite
+├── docs/
+│   └── README.md                   # This file
+└── codebase_convert/
+    ├── __init__.py                 # Package entry point
+    ├── codebase_convert.py         # Core orchestration and formatter strategy classes
+    └── utils/
+        ├── __init__.py             # Public re-exports for all utilities
+        ├── utils.py                # Token estimation (cl100k_base via tiktoken)
+        ├── git_utils.py            # GitHub clone service with atexit cleanup registry
+        ├── fs_utils.py             # Filesystem walker (generator for local, threaded for remote)
+        └── image_utils.py          # Image compression and type detection
+```
+### Key Design Decisions
+**Strategy Pattern for Output Formats**
+`TxtFormatter`, `MdFormatter`, and `DocxFormatter` all implement the `OutputFormatter` abstract base class. Each formatter owns its own `format_file_success()`, `format_file_error()`, `combine_text()`, and `save_file()` methods — including all `python-docx` object manipulation inside `DocxFormatter`. `get_file()` in `CodebaseConvert` simply delegates to `self.formatter.save_file(...)` with no output-type branching logic.
+**Filesystem Walker Strategy**
+`fs_utils.py` exposes a `walk_filesystem_generator()` that yields `(file, root, base_path)` tuples lazily. `process_files_with_strategy()` decides whether to consume that generator synchronously (local paths) or via a `ThreadPoolExecutor` (GitHub clones), keeping threading overhead off small local repositories.
+**GitHub Clone Lifecycle**
+`git_utils.py` maintains a module-level `_temp_dirs` registry. Every directory created by `clone_github_repo()` is appended to this list, and `atexit.register(cleanup_temp_dirs)` ensures all of them are deleted on process exit — including on `SIGTERM` — without relying on `__exit__` being called.
+**Security: Path Traversal Prevention**
+`_safe_input_path()` in `app.py` calls `pathlib.Path.resolve()` on both the input path and the workspace root before the `startswith` comparison, neutralising symlink-based directory escape attempts that `os.path.abspath` does not catch.
+**Token Estimation**
+All token counting is centralised in `codebase_convert/utils/utils.py` using `tiktoken`'s `cl100k_base` encoding. Neither `CodebaseConvert` nor `app.py` contain their own counting logic; both import from `codebase_convert.utils`.
+## 🔄 Output Format
+The generated output includes:
+1. **Folder Structure**: Tree-like representation of the directory structure
+2. **File Contents**: Full content of each file with metadata
+3. **Clear Separators**: Distinct sections for easy navigation
+## 🤝🏾 Contributing
+Contributions are welcome! Please follow these steps:
+- Fork the repository.
+- Create a new branch (git checkout -b feature_branch).
+- Make your changes.
+- Commit your changes (git commit -am 'Add new feature').
+- Push to the branch (git push origin feature_branch).
+- Create a new Pull Request.
+## ✒️ License
+This project is licensed under the MIT License - see [LICENSE](./LICENSE.md) for details.
+==================================================================
+Feel free to customize this template to better suit your project's specifics. Ensure you update placeholders like `"path_or_github_url"`, `"output_path"`, `"txt"`, and `"docx"` with actual values and add any additional sections or information that you think would be useful for your users.
 ```
 
-### File: `docs\codebase-convert-2.0.0.md`
+### File: `docs/codebase-convert-2.0.0.md`
 
 ```markdown
 # Folder Structure
 ```text
 codebase_to_text/
-    app.py
     LICENSE
     requirements.txt
-    setup.cfg
     setup.py
+    app.py
+    setup.cfg
+    converted-repos/
     codebase_convert/
-        codebase_convert.py
         pytest.ini
+        codebase_convert.py
         requirements-dev.txt
-        __init__.py
         utils/
-            fs_utils.py
-            git_utils.py
             image_utils.py
             utils.py
-            __init__.py
-    converted-repos/
-    docs/
-        README.md
-    templates/
-        index.html
+            fs_utils.py
+            git_utils.py
     tests/
         test_codebase_convert.py
-        __init__.py
+    docs/
+        README.md
+    scratch/
+    templates/
+        index.html
+    data/
+        large_files/
 ```
 # File Contents
-### File: `app.py`
-```python
-import os
-import tempfile
-import shutil
-from pathlib import Path
-from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_file, render_template, after_this_request
-from flasgger import Swagger
-from codebase_convert.codebase_convert import CodebaseConvert
-from codebase_convert.utils.fs_utils import walk_filesystem_generator
-app = Flask(__name__)
-# Configure Flasgger
-swagger_config = {
-    "headers": [],
-    "specs": [
-        {
-            "endpoint": "apispec",
-            "route": "/apispec.json",
-            "rule_filter": lambda rule: True,
-            "model_filter": lambda tag: True,
-        }
-    ],
-    "static_url_path": "/flasgger_static",
-    "swagger_ui": True,
-    "specs_route": "/apidocs/"
-}
-swagger = Swagger(app, config=swagger_config, template={
-    "info": {
-        "title": "Codebase Convert API",
-        "description": "API for converting a codebase (local path or GitHub URL) into text, markdown, or docx.",
-        "version": "2.0.0"
-    }
-})
-@app.route('/api/convert', methods=['POST'])
-def convert():
-    """
-    Convert a codebase to a single text document
-    ---
-    tags:
-      - Conversion
-    consumes:
-      - application/json
-    parameters:
-      - in: body
-        name: body
-        required: true
-        schema:
-          type: object
-          required:
-            - input
-          properties:
-            input:
-              type: string
-              description: GitHub URL or absolute local path to the codebase
-              example: "https://github.com/QaisarRajput/codebase_to_text"
-            output_type:
-              type: string
-              enum: ['txt', 'md', 'docx']
-              default: 'txt'
-              description: The format of the output file
-            exclude:
-              type: array
-              items:
-                type: string
-              description: Patterns to exclude
-              example: ["*.log", "temp/", "**/__pycache__/**"]
-            exclude_hidden:
-              type: boolean
-              default: true
-              description: Exclude hidden files and directories (like .git, .env)
-            ai_optimize:
-              type: boolean
-              default: true
-              description: Optimize the output format for AI processing (strips empty lines, removes binary files, etc.)
-            strip_comments:
-              type: boolean
-              default: false
-              description: Strip single-line comments from the code
-            verbose:
-              type: boolean
-              default: false
-              description: Enable verbose logging output (prints to stdout)
-    responses:
-      200:
-        description: The generated document file
-        content:
-          application/octet-stream: {}
-      400:
-        description: Invalid request parameters
-      500:
-        description: Conversion failed
-    """
-    data = request.json or {}
-    input_path = data.get('input')
-    if not input_path:
-        return jsonify({"error": "The 'input' parameter is required. It must be a valid GitHub URL or local path."}), 400
-    output_type = data.get('output_type', 'txt')
-    if output_type not in ['txt', 'md', 'docx']:
-        return jsonify({"error": "output_type must be txt, md, or docx."}), 400
-    exclude = data.get('exclude', [])
-    exclude_hidden = data.get('exclude_hidden', True)
-    ai_optimize = data.get('ai_optimize', True)
-    strip_comments = data.get('strip_comments', False)
-    verbose = data.get('verbose', False)
-    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
-# Root directory for path traversal checks. 
-# We use the parent directory of the current workspace to allow users to select other local projects.
-WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
-def _safe_input_path(input_path: str) -> bool:
-    # Allow explicit GitHub forms
-    if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
-        return True
-    parsed = urlparse(input_path)
-    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
-    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
-        return False
-    try:
-        target = Path(input_path)
-        # On Windows, a path starting with / or \ is considered absolute but has no drive.
-        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
-        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
-            target = WORKSPACE_DIR / input_path.lstrip('/\\')
-        target = target.resolve()
-        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
-        # and drive letter variations reliably.
-        target_str = str(target).lower()
-        workspace_str = str(WORKSPACE_DIR).lower()
-        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
-    except Exception:
-        return False
-def write_to(self, output_path: str) -> None:
-    repo_path = self._resolve_working_path()
-    with open(output_path, "w", encoding="utf-8") as out:
-        out.write(self._parse_folder(repo_path))
-        out.write("\n--- FILE CONTENTS ---\n\n")
-        for file, root, base in walk_filesystem_generator(
-            repo_path,
-            self._should_exclude,
-            self._handle_directory_exclusion,
-            self._filter_directories_for_processing
-        ):
-            chunk = self._process_single_file(file, root, base)
-            if chunk:
-                out.write(chunk)
-def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
-    if not _safe_input_path(input_path):
-        err = "Path traversal detected or invalid path."
-        return (jsonify({"error": err}), 403) if is_json else (err, 403)
-    tmpdir = tempfile.mkdtemp(prefix="convert_")
-    output_file = os.path.join(tmpdir, f"output.{output_type}")
-    @after_this_request
-    def cleanup(response):
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        return response
-    try:
-        with CodebaseConvert(
-            input_path=input_path,
-            output_path=output_file,
-            output_type=output_type,
-            exclude=exclude,
-            exclude_hidden=exclude_hidden,
-            ai_optimize=ai_optimize,
-            strip_comments=strip_comments,
-            verbose=verbose
-        ) as converter:
-            text_output = converter.get_text()
-            converter.get_file(text_output=text_output)
-            from codebase_convert.utils.utils import estimate_tokens
-            token_count = estimate_tokens(text_output, verbose=verbose) or 0
-            # Send the generated file with token count header
-            response = send_file(
-                output_file,
-                as_attachment=True,
-                download_name=download_filename or f"output.{output_type}"
-            )
-            response.headers['X-Token-Count'] = str(token_count)
-            response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
-            return response
-    except Exception as e:
-        return (jsonify({"error": str(e)}), 500) if is_json else (f"Conversion failed: {str(e)}", 500)
-@app.route('/', methods=['GET'])
-def index():
-    """
-    Render the Graphical Web UI
-    """
-    return render_template('index.html')
-@app.route('/api/form-convert', methods=['POST'])
-def form_convert():
-    """
-    Handle form submissions from the Web UI to download the output.
-    """
-    input_path = request.form.get('input')
-    if not input_path:
-        return "The 'input' parameter is required.", 400
-    output = request.form.get('output')
-    if not output:
-        return "The 'output' parameter is required.", 400
-    output_type = request.form.get('output_type', 'txt')
-    exclude_raw = request.form.get('exclude', '')
-    exclude = [e.strip() for e in exclude_raw.split(',')] if exclude_raw else []
-    # Checkboxes only send data if checked
-    exclude_hidden = request.form.get('exclude_hidden') == 'on'
-    verbose = request.form.get('verbose') == 'on'
-    no_ai_optimize = request.form.get('no_ai_optimize') == 'on'
-    ai_optimize = not no_ai_optimize
-    strip_comments = request.form.get('strip_comments') == 'on'
-    download_filename = output
-    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
-if __name__ == "__main__":
-    host = os.environ.get("FLASK_HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "5003"))
-    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(debug=debug, host=host, port=port)
-```
 ### File: `LICENSE`
 ```
                                  Apache License
@@ -1773,12 +2226,6 @@ tiktoken>=0.5.0
 flask
 flasgger
 ```
-### File: `setup.cfg`
-```
-# Inside of setup.cfg
-[metadata]
-description-file = README.md
-```
 ### File: `setup.py`
 ```python
 # Modified from Qaisar Tanvir's original codebase-convert setup.py to include Pillow for image support in python-docx and updated version numbers for dependencies.
@@ -1822,7 +2269,220 @@ setup(
     ],
 )
 ```
-### File: `codebase_convert\codebase_convert.py`
+### File: `app.py`
+```python
+import os
+import tempfile
+import shutil
+from pathlib import Path
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request
+from flasgger import Swagger
+from codebase_convert.codebase_convert import CodebaseConvert
+from codebase_convert.utils.fs_utils import walk_filesystem_generator
+app = Flask(__name__)
+# Configure Flasgger
+swagger_config = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": "apispec",
+            "route": "/apispec.json",
+            "rule_filter": lambda rule: True,
+            "model_filter": lambda tag: True,
+        }
+    ],
+    "static_url_path": "/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/apidocs/"
+}
+swagger = Swagger(app, config=swagger_config, template={
+    "info": {
+        "title": "Codebase Convert API",
+        "description": "API for converting a codebase (local path or GitHub URL) into text, markdown, or docx.",
+        "version": "2.0.0"
+    }
+})
+@app.route('/api/convert', methods=['POST'])
+def convert():
+    """
+    Convert a codebase to a single text document
+    ---
+    tags:
+      - Conversion
+    consumes:
+      - application/json
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - input
+          properties:
+            input:
+              type: string
+              description: GitHub URL or absolute local path to the codebase
+              example: "https://github.com/QaisarRajput/codebase_to_text"
+            output_type:
+              type: string
+              enum: ['txt', 'md', 'docx']
+              default: 'txt'
+              description: The format of the output file
+            exclude:
+              type: array
+              items:
+                type: string
+              description: Patterns to exclude
+              example: ["*.log", "temp/", "**/__pycache__/**"]
+            exclude_hidden:
+              type: boolean
+              default: true
+              description: Exclude hidden files and directories (like .git, .env)
+            ai_optimize:
+              type: boolean
+              default: true
+              description: Optimize the output format for AI processing (strips empty lines, removes binary files, etc.)
+            strip_comments:
+              type: boolean
+              default: false
+              description: Strip single-line comments from the code
+            verbose:
+              type: boolean
+              default: false
+              description: Enable verbose logging output (prints to stdout)
+    responses:
+      200:
+        description: The generated document file
+        content:
+          application/octet-stream: {}
+      400:
+        description: Invalid request parameters
+      500:
+        description: Conversion failed
+    """
+    data = request.json or {}
+    input_path = data.get('input')
+    if not input_path:
+        return jsonify({"error": "The 'input' parameter is required. It must be a valid GitHub URL or local path."}), 400
+    output_type = data.get('output_type', 'txt')
+    if output_type not in ['txt', 'md', 'docx']:
+        return jsonify({"error": "output_type must be txt, md, or docx."}), 400
+    exclude = data.get('exclude', [])
+    exclude_hidden = data.get('exclude_hidden', True)
+    ai_optimize = data.get('ai_optimize', True)
+    strip_comments = data.get('strip_comments', False)
+    verbose = data.get('verbose', False)
+    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, True)
+# Root directory for path traversal checks. 
+# We use the parent directory of the current workspace to allow users to select other local projects.
+WORKSPACE_DIR = Path(os.getcwd()).resolve().parent
+def _safe_input_path(input_path: str) -> bool:
+    # Allow explicit GitHub forms
+    if input_path.startswith("https://github.com/") or input_path.startswith("git@github.com:"):
+        return True
+    parsed = urlparse(input_path)
+    # Block URL schemes to prevent SSRF, but allow single-letter 'schemes' (Windows drive letters)
+    if parsed.scheme and len(parsed.scheme) > 1 and parsed.scheme in ("http", "https", "ftp", "ssh", "git"):
+        return False
+    try:
+        target = Path(input_path)
+        # On Windows, a path starting with / or \ is considered absolute but has no drive.
+        # We want to treat such paths as relative to our WORKSPACE_DIR (the Documents folder).
+        if not target.is_absolute() or (target.is_absolute() and not target.drive and (input_path.startswith('/') or input_path.startswith('\\'))):
+            target = WORKSPACE_DIR / input_path.lstrip('/\\')
+        target = target.resolve()
+        # Robust path containment check using lower-case string comparison to handle Windows case-insensitivity
+        # and drive letter variations reliably.
+        target_str = str(target).lower()
+        workspace_str = str(WORKSPACE_DIR).lower()
+        return target_str == workspace_str or target_str.startswith(workspace_str + os.sep)
+    except Exception:
+        return False
+def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
+    if not _safe_input_path(input_path):
+        err = "Path traversal detected or invalid path."
+        return (jsonify({"error": err}), 403) if is_json else (err, 403)
+    tmpdir = tempfile.mkdtemp(prefix="convert_")
+    output_file = os.path.join(tmpdir, f"output.{output_type}")
+    @after_this_request
+    def cleanup(response):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return response
+    try:
+        with CodebaseConvert(
+            input_path=input_path,
+            output_path=output_file,
+            output_type=output_type,
+            exclude=exclude,
+            exclude_hidden=exclude_hidden,
+            ai_optimize=ai_optimize,
+            strip_comments=strip_comments,
+            verbose=verbose
+        ) as converter:
+            text_output = converter.get_text()
+            converter.get_file(text_output=text_output)
+            from codebase_convert.utils.utils import estimate_tokens
+            token_count = estimate_tokens(text_output, verbose=verbose) or 0
+            # Send the generated file with token count header
+            response = send_file(
+                output_file,
+                as_attachment=True,
+                download_name=download_filename or f"output.{output_type}"
+            )
+            response.headers['X-Token-Count'] = str(token_count)
+            response.headers['Access-Control-Expose-Headers'] = 'X-Token-Count'
+            return response
+    except Exception as e:
+        return (jsonify({"error": str(e)}), 500) if is_json else (f"Conversion failed: {str(e)}", 500)
+@app.route('/', methods=['GET'])
+def index():
+    """
+    Render the Graphical Web UI
+    """
+    return render_template('index.html')
+@app.route('/api/form-convert', methods=['POST'])
+def form_convert():
+    """
+    Handle form submissions from the Web UI to download the output.
+    """
+    input_path = request.form.get('input')
+    if not input_path:
+        return "The 'input' parameter is required.", 400
+    output = request.form.get('output')
+    if not output:
+        return "The 'output' parameter is required.", 400
+    output_type = request.form.get('output_type', 'txt')
+    exclude_raw = request.form.get('exclude', '')
+    exclude = [e.strip() for e in exclude_raw.split(',')] if exclude_raw else []
+    # Checkboxes only send data if checked
+    exclude_hidden = request.form.get('exclude_hidden') == 'on'
+    verbose = request.form.get('verbose') == 'on'
+    no_ai_optimize = request.form.get('no_ai_optimize') == 'on'
+    ai_optimize = not no_ai_optimize
+    strip_comments = request.form.get('strip_comments') == 'on'
+    download_filename = output
+    return _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, False, download_filename)
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5003"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host=host, port=port)
+```
+### File: `setup.cfg`
+```
+# Inside of setup.cfg
+[metadata]
+description-file = README.md
+```
+### File: `codebase_convert/pytest.ini`
+```
+[pytest]
+testpaths = tests
+addopts = -v
+```
+### File: `codebase_convert/codebase_convert.py`
 ```python
 """
 Codebase to Text Converter
@@ -2020,12 +2680,10 @@ class CodebaseConvert:
         self._load_gitignore()
         if self.verbose and self.exclude_patterns:
             logger.debug(f"Active exclusion patterns: {sorted(self.exclude_patterns)}")
-    def _load_gitignore(self):
+    def _load_gitignore(self, base_path: Optional[str] = None):
         """Load patterns from local .gitignore file if present."""
-        gitignore_path = os.path.join(
-            self.input_path if not self.is_github_repo() else '.',
-            '.gitignore'
-        )
+        search_path = base_path if base_path else (self.input_path if not self.is_github_repo() else '.')
+        gitignore_path = os.path.join(search_path, '.gitignore')
         if not os.path.exists(gitignore_path):
             return
         try:
@@ -2076,12 +2734,10 @@ class CodebaseConvert:
             }
             default_excludes.update(media_excludes)
         self.exclude_patterns.update(default_excludes)
-    def _add_file_patterns(self):
+    def _add_file_patterns(self, base_path: Optional[str] = None):
         """Load patterns from a .exclude file if present."""
-        exclude_file_path = os.path.join(
-            self.input_path if not self.is_github_repo() else '.',
-            '.exclude'
-        )
+        search_path = base_path if base_path else (self.input_path if not self.is_github_repo() else '.')
+        exclude_file_path = os.path.join(search_path, '.exclude')
         if not os.path.exists(exclude_file_path):
             return
         try:
@@ -2444,22 +3100,98 @@ Examples:
 if __name__ == "__main__":
     sys.exit(main())
 ```
-### File: `codebase_convert\pytest.ini`
-```
-[pytest]
-testpaths = tests
-addopts = -v
-```
-### File: `codebase_convert\requirements-dev.txt`
+### File: `codebase_convert/requirements-dev.txt`
 ```
 pytest
 ```
-### File: `codebase_convert\__init__.py`
+### File: `codebase_convert/utils/image_utils.py`
 ```python
-# Inside of __init__.py
-from codebase_convert.codebase_convert import CodebaseConvert
+import io
+import logging
+import os
+from typing import Optional, Tuple
+from PIL import Image, ImageFile, UnidentifiedImageError
+logger = logging.getLogger("codebase_convert")
+IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".ico",
+    ".webp",
+}
+MAX_IMAGE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_BYTES", "5000000"))
+MAX_IMAGE_PIXELS = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_PIXELS", "20000000"))
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+ImageFile.LOAD_TRUNCATED_IMAGES = False
+def is_image_file(file_path: str) -> bool:
+    """Check if the file is a supported raster image based on extension."""
+    return os.path.splitext(file_path)[1].lower() in IMAGE_EXTENSIONS
+def compress_image(
+    file_path: str,
+    max_size: Tuple[int, int] = (1024, 1024),
+    quality: int = 70,
+    verbose: bool = False,
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """Resize and compress image for smaller blob size."""
+    try:
+        if os.path.getsize(file_path) > MAX_IMAGE_BYTES:
+            if verbose:
+                logger.warning(f"Image too large to process safely: {file_path}")
+            return None, None
+        with Image.open(file_path) as img:
+            img.verify()
+        with Image.open(file_path) as img:
+            img.load()
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                if verbose:
+                    logger.warning(f"Image pixel count too large to process safely: {file_path}")
+                return None, None
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode in ("RGBA", "LA"):
+                    alpha = img.getchannel("A")
+                    background.paste(img.convert("RGBA"), mask=alpha)
+                else:
+                    background.paste(img.convert("RGB"))
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            if img.width > max_size[0] or img.height > max_size[1]:
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format="JPEG", quality=quality, optimize=True)
+            return output.getvalue(), "image/jpeg"
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as e:
+        if verbose:
+            logger.warning(f"Compression failed for {file_path}: {e}")
+        return None, None
 ```
-### File: `codebase_convert\utils\fs_utils.py`
+### File: `codebase_convert/utils/utils.py`
+```python
+import logging
+from typing import Optional
+try:
+    import tiktoken
+    HAS_TIKTOKEN = True
+except ImportError:
+    HAS_TIKTOKEN = False
+logger = logging.getLogger('codebase_convert')
+def estimate_tokens(text: str, verbose: bool = False) -> Optional[int]:
+    '''Estimate token count for LLM usage using tiktoken'''
+    if not HAS_TIKTOKEN:
+        return None
+    try:
+        enc = tiktoken.get_encoding('cl100k_base')
+        return len(enc.encode(text, disallowed_special=()))
+    except Exception as e:
+        if verbose:
+            logger.warning(f'Could not estimate tokens: {e}')
+        return None
+```
+### File: `codebase_convert/utils/fs_utils.py`
 ```python
 import os
 import concurrent.futures
@@ -2508,7 +3240,7 @@ def process_files_with_strategy(is_github_repo: bool, path: str, should_exclude:
                 processed_count += 1
     return content_pieces, processed_count
 ```
-### File: `codebase_convert\utils\git_utils.py`
+### File: `codebase_convert/utils/git_utils.py`
 ```python
 import atexit
 import logging
@@ -2586,108 +3318,448 @@ def clone_github_repo(repo_url: str, verbose: bool = False) -> str:
             _temp_dirs.remove(temp_dir)
         raise
 ```
-### File: `codebase_convert\utils\image_utils.py`
+### File: `tests/test_codebase_convert.py`
 ```python
-import io
-import logging
+import unittest
 import os
-from typing import Optional, Tuple
-from PIL import Image, ImageFile, UnidentifiedImageError
-logger = logging.getLogger("codebase_convert")
-IMAGE_EXTENSIONS = {
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".bmp",
-    ".tiff",
-    ".ico",
-    ".webp",
-}
-MAX_IMAGE_BYTES = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_BYTES", "5000000"))
-MAX_IMAGE_PIXELS = int(os.environ.get("CODEBASE_CONVERT_MAX_IMAGE_PIXELS", "20000000"))
-Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
-ImageFile.LOAD_TRUNCATED_IMAGES = False
-def is_image_file(file_path: str) -> bool:
-    """Check if the file is a supported raster image based on extension."""
-    return os.path.splitext(file_path)[1].lower() in IMAGE_EXTENSIONS
-def compress_image(
-    file_path: str,
-    max_size: Tuple[int, int] = (1024, 1024),
-    quality: int = 70,
-    verbose: bool = False,
-) -> Tuple[Optional[bytes], Optional[str]]:
-    """Resize and compress image for smaller blob size."""
-    try:
-        if os.path.getsize(file_path) > MAX_IMAGE_BYTES:
-            if verbose:
-                logger.warning(f"Image too large to process safely: {file_path}")
-            return None, None
-        with Image.open(file_path) as img:
-            img.verify()
-        with Image.open(file_path) as img:
-            img.load()
-            if img.width * img.height > MAX_IMAGE_PIXELS:
-                if verbose:
-                    logger.warning(f"Image pixel count too large to process safely: {file_path}")
-                return None, None
-            if img.mode in ("RGBA", "LA", "P"):
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode in ("RGBA", "LA"):
-                    alpha = img.getchannel("A")
-                    background.paste(img.convert("RGBA"), mask=alpha)
-                else:
-                    background.paste(img.convert("RGB"))
-                img = background
-            elif img.mode != "RGB":
-                img = img.convert("RGB")
-            if img.width > max_size[0] or img.height > max_size[1]:
-                img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            output = io.BytesIO()
-            img.save(output, format="JPEG", quality=quality, optimize=True)
-            return output.getvalue(), "image/jpeg"
-    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as e:
-        if verbose:
-            logger.warning(f"Compression failed for {file_path}: {e}")
-        return None, None
+import sys
+import tempfile
+import shutil
+from pathlib import Path
+# Add parent directory to path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from codebase_convert.codebase_convert import CodebaseConvert
+class TestCodebaseConvert(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment with temporary folder structure"""
+        self.test_folder_path = tempfile.mkdtemp(prefix="test_codebase_")
+        # Create test folder structure
+        self._create_test_structure()
+        # Output paths for testing
+        self.output_txt = os.path.join(self.test_folder_path, "output.txt")
+        self.output_docx = os.path.join(self.test_folder_path, "output.docx")
+    def _create_test_structure(self):
+        """Create a complex test folder structure"""
+        base = self.test_folder_path
+        # Create main files
+        with open(os.path.join(base, "main.py"), "w") as f:
+            f.write("print('Hello World')")
+        with open(os.path.join(base, "README.md"), "w") as f:
+            f.write("# Test Project\nThis is a test.")
+        with open(os.path.join(base, "requirements.txt"), "w") as f:
+            f.write("flask>=2.0.0\nflasgger>=0.9.5\npython-docx>=0.8.11\nPillow>=8.0.0\ngitpython>=3.1.0\npathspec>=0.9.0\ntiktoken>=0.3.0")
+        # Create subdirectories
+        os.makedirs(os.path.join(base, "src"), exist_ok=True)
+        os.makedirs(os.path.join(base, "tests"), exist_ok=True)
+        os.makedirs(os.path.join(base, "__pycache__"), exist_ok=True)
+        os.makedirs(os.path.join(base, ".git"), exist_ok=True)
+        os.makedirs(os.path.join(base, "venv", "lib"), exist_ok=True)
+        os.makedirs(os.path.join(base, "logs"), exist_ok=True)
+        # Create files in subdirectories
+        with open(os.path.join(base, "src", "app.py"), "w") as f:
+            f.write("def main():\n    pass")
+        with open(os.path.join(base, "src", "utils.py"), "w") as f:
+            f.write("def helper():\n    return True")
+        with open(os.path.join(base, "tests", "test_app.py"), "w") as f:
+            f.write("import unittest\n\nclass TestApp(unittest.TestCase):\n    pass")
+        # Create files that should be excluded by default
+        with open(os.path.join(base, "__pycache__", "app.cpython-39.pyc"), "w") as f:
+            f.write("binary content")
+        with open(os.path.join(base, ".git", "config"), "w") as f:
+            f.write("[core]\nrepositoryformatversion = 0")
+        with open(os.path.join(base, "venv", "lib", "python3.9"), "w") as f:
+            f.write("virtual env file")
+        with open(os.path.join(base, "logs", "app.log"), "w") as f:
+            f.write("2023-01-01 10:00:00 INFO Application started")
+        with open(os.path.join(base, "temp.tmp"), "w") as f:
+            f.write("temporary content")
+        # Create hidden files
+        with open(os.path.join(base, ".gitignore"), "w") as f:
+            f.write("*.pyc\n__pycache__/\n.env")
+        with open(os.path.join(base, ".env"), "w") as f:
+            f.write("SECRET_KEY=test123")
+    def test_basic_functionality(self):
+        """Test basic text generation without exclusions"""
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        self.assertIn("Folder Structure", text)
+        self.assertIn("File Contents", text)
+        self.assertIn("main.py", text)
+        self.assertIn("Hello World", text)
+    def test_exclude_hidden_files(self):
+        """Test exclusion of hidden files"""
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=True,
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        self.assertNotIn(".gitignore", text)
+        self.assertNotIn(".env", text)
+        self.assertIn("main.py", text)  # Regular files should still be included
+    def test_exclude_patterns(self):
+        """Test pattern-based exclusions"""
+        exclude_patterns = ["*.log", "*.tmp", "__pycache__/**", ".git/**"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude log and tmp files from folder structure
+        self.assertNotIn("app.log", folder_structure_section)
+        self.assertNotIn("temp.tmp", folder_structure_section)
+        self.assertNotIn("__pycache__/", folder_structure_section)
+        self.assertNotIn(".git/", folder_structure_section)
+        # Should include normal files in folder structure
+        self.assertIn("main.py", folder_structure_section)
+        self.assertIn("src/", folder_structure_section)
+    def test_exclude_specific_files(self):
+        """Test exclusion of specific files"""
+        exclude_patterns = ["README.md", "requirements.txt"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+          # Should exclude specified files
+        self.assertNotIn("README.md", text)
+        self.assertNotIn("requirements.txt", text)
+        # Should include other files
+        self.assertIn("main.py", text)
+    def test_exclude_directories(self):
+        """Test exclusion of entire directories"""
+        exclude_patterns = ["venv/", "logs/"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=exclude_patterns,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude specified directories from folder structure
+        self.assertNotIn("venv/", folder_structure_section)
+        self.assertNotIn("logs/", folder_structure_section)
+        # Should include other directories
+        self.assertIn("src/", folder_structure_section)
+        self.assertIn("tests/", folder_structure_section)
+    def test_exclude_file_creation(self):
+        """Test loading exclusion patterns from .exclude file"""
+        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
+        # Create .exclude file
+        with open(exclude_file_path, "w") as f:
+            f.write("# This is a comment\n")
+            f.write("*.log\n")
+            f.write("temp.tmp\n")
+            f.write("venv/\n")
+            f.write("\n")  # Empty line
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude files listed in .exclude file from folder structure
+        self.assertNotIn("app.log", folder_structure_section)
+        self.assertNotIn("temp.tmp", folder_structure_section)
+        self.assertNotIn("venv/", folder_structure_section)
+    def test_combined_exclusions(self):
+        """Test combination of CLI args and .exclude file"""
+        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
+        # Create .exclude file
+        with open(exclude_file_path, "w") as f:
+            f.write("*.log\n")
+            f.write("venv/\n")
+        # Also provide CLI exclusions
+        cli_excludes = ["*.tmp", "__pycache__/"]
+        code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=cli_excludes,
+            ai_optimize=False,
+            strip_comments=False
+        )
+        text = code_to_text.get_text()
+        # Split the text to get only the folder structure section
+        folder_structure_section = text.split("File Contents")[0]
+        # Should exclude files from both sources from folder structure
+        self.assertNotIn("app.log", folder_structure_section)  # From .exclude file
+        self.assertNotIn("venv/", folder_structure_section)    # From .exclude file
+        self.assertNotIn("temp.tmp", folder_structure_section) # From CLI
+        self.assertNotIn("__pycache__/", folder_structure_section) # From CLI
+    def test_output_file_generation_txt(self):
+        """Test TXT file output generation"""
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=["*.log", "*.tmp"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
+            code_to_text.get_file()
+        # Check if output file was created
+        self.assertTrue(os.path.exists(self.output_txt))
+        # Check content
+        with open(self.output_txt, "r", encoding="utf-8") as f:
+            content = f.read()
+            self.assertIn("Folder Structure", content)
+            self.assertIn("main.py", content)
+    def test_output_file_generation_docx(self):
+        """Test DOCX file output generation"""
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_docx,
+            output_type="docx",
+            verbose=False,
+            exclude_hidden=False,
+            exclude=["*.log", "*.tmp"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
+            code_to_text.get_file()
+        # Check if output file was created
+        self.assertTrue(os.path.exists(self.output_docx))
+    def test_verbose_mode(self):
+        """Test verbose output mode"""
+        with self.assertLogs('codebase_convert', level='DEBUG') as cm:
+            with CodebaseConvert(
+                input_path=self.test_folder_path,
+                output_path=self.output_txt,
+                output_type="txt",
+                verbose=True,
+                exclude_hidden=False,
+                exclude=["*.log"],
+                ai_optimize=False,
+                strip_comments=False
+            ) as code_to_text:
+                code_to_text.get_file()
+            output = "\\n".join(cm.output)
+            # Should contain verbose messages
+            self.assertIn("Active exclusion patterns", output)
+            self.assertIn("Processing:", output)
+    def test_invalid_output_type(self):
+        """Test error handling for invalid output type"""
+        with self.assertRaises(ValueError):
+            with CodebaseConvert(
+                input_path=self.test_folder_path,
+                output_path="output.xyz",
+                output_type="xyz",
+                verbose=False,
+                exclude_hidden=False,
+                exclude=[],
+                ai_optimize=False,
+                strip_comments=False
+            ) as code_to_text:
+                code_to_text.get_file()    
+    def test_exclusion_count_tracking(self):
+        """Test that exclusion counting works correctly"""
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=True,  # Need verbose mode for this test to work properly
+            exclude_hidden=False,
+            exclude=["*.log", "*.tmp", "__pycache__/**"],
+            ai_optimize=False,
+            strip_comments=False
+        ) as code_to_text:
+            # Generate text to trigger exclusion counting
+            code_to_text.get_text()
+            # Should have excluded some files
+            self.assertGreater(code_to_text.excluded_files_count, 0)
+    def test_ai_optimize(self):
+        """Test the new ai_optimize feature strips whitespace"""
+        file_path = os.path.join(self.test_folder_path, "ai_test.py")
+        with open(file_path, "w") as f:
+            f.write("def func():\n    pass\n\n\n\n# test")
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            ai_optimize=True,
+            strip_comments=False
+        ) as code_to_text:
+            text = code_to_text.get_text()
+            self.assertIn("<file path", text) # Check strategy pattern applied ai framing
+    def test_strip_comments(self):
+        """Test the new strip_comments feature removed comments"""
+        file_path = os.path.join(self.test_folder_path, "comment_test.py")
+        with open(file_path, "w") as f:
+            f.write("# this is a comment\ndef func():\n    pass")
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path=self.output_txt,
+            output_type="txt",
+            verbose=False,
+            ai_optimize=True,
+            strip_comments=True
+        ) as code_to_text:
+            text = code_to_text.get_text()
+            self.assertNotIn("this is a comment", text)
+    def tearDown(self):
+        """Clean up test environment"""
+        if os.path.exists(self.test_folder_path):
+            shutil.rmtree(self.test_folder_path)
+class TestPatternMatching(unittest.TestCase):
+    """Test exclusion pattern matching specifically"""
+    def setUp(self):
+        self.test_folder_path = tempfile.mkdtemp(prefix="test_patterns_")
+        with CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path="dummy.txt",
+            output_type="txt",
+            exclude=[]
+        ) as self.code_to_text:
+            pass # just used to initialize it
+        # Manually reconstruct the object since `with` block closes it for testing internals:
+        self.code_to_text = CodebaseConvert(
+            input_path=self.test_folder_path,
+            output_path="dummy.txt",
+            output_type="txt",
+            exclude=[],
+            ai_optimize=False,
+            strip_comments=False
+        )
+    def test_wildcard_patterns(self):
+        """Test wildcard pattern matching"""
+        self.code_to_text.exclude_patterns = {"*.py", "*.log"}
+        # Should match
+        self.assertTrue(self.code_to_text._should_exclude("test.py", self.test_folder_path))
+        self.assertTrue(self.code_to_text._should_exclude("app.log", self.test_folder_path))
+        # Should not match
+        self.assertFalse(self.code_to_text._should_exclude("test.txt", self.test_folder_path))
+        self.assertFalse(self.code_to_text._should_exclude("README.md", self.test_folder_path))
+    def test_directory_patterns(self):
+        """Test directory pattern matching"""
+        self.code_to_text.exclude_patterns = {"__pycache__/", "node_modules/"}
+        # Create test directories
+        pycache_dir = os.path.join(self.test_folder_path, "__pycache__")
+        os.makedirs(pycache_dir, exist_ok=True)
+        # Should match directories
+        self.assertTrue(self.code_to_text._should_exclude(pycache_dir, self.test_folder_path))
+    def test_recursive_patterns(self):
+        """Test recursive wildcard patterns"""
+        self.code_to_text.exclude_patterns = {"**/__pycache__/**", "**/node_modules/**"}
+        # Create nested test structure
+        nested_pycache = os.path.join(self.test_folder_path, "src", "utils", "__pycache__", "file.pyc")
+        os.makedirs(os.path.dirname(nested_pycache), exist_ok=True)
+        # Should match nested paths
+        self.assertTrue(self.code_to_text._should_exclude(nested_pycache, self.test_folder_path))
+    def tearDown(self):
+        """Clean up test environment"""
+        if os.path.exists(self.test_folder_path):
+            shutil.rmtree(self.test_folder_path)
+class TestDocxImage(unittest.TestCase):
+    def test_docx_with_image(self):
+        import tempfile
+        import os
+        import base64
+        from docx import Document
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Write a dummy 1x1 PNG image
+            img_path = os.path.join(temp_dir, "dummy.png")
+            png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAC0lEQVQIW2NgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII="
+            with open(img_path, "wb") as f:
+                f.write(base64.b64decode(png_data))
+            # Create a new DOCX document and add a picture
+            doc = Document()
+            doc.add_paragraph("Testing DOCX image inclusion.")
+            doc.add_picture(img_path)
+            # Save the document
+            doc_path = os.path.join(temp_dir, "test.docx")
+            doc.save(doc_path)
+            # Reload the document and assert that it contains an inline image
+            new_doc = Document(doc_path)
+            self.assertGreater(len(new_doc.inline_shapes), 0, "Document should contain at least one inline image.")
+class TestImageCompression(unittest.TestCase):
+    def test_image_compression(self):
+        """Test images that compress into .txt format correctly"""
+        import tempfile
+        import os
+        import base64
+        from PIL import Image
+        import io
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a simple 100x100 red PNG image
+            img = Image.new('RGB', (100, 100), color='red')
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format='PNG')
+            img_data = img_bytes.getvalue()
+            # Write the image to a file
+            img_path = os.path.join(temp_dir, "test_image.png")
+            with open(img_path, "wb") as f:
+                f.write(img_data)
+            # Create a CodebaseConvert instance
+            code_to_text = CodebaseConvert(
+                input_path=temp_dir,
+                output_path="dummy.txt",
+                output_type="txt",
+                verbose=False,
+                exclude_hidden=False,
+                exclude=[],
+                ai_optimize=False,
+                strip_comments=False
+            )
+            # Test compression to TXT format
+            from codebase_convert.utils.image_utils import compress_image
+            blob_bytes, mime_type = compress_image(img_path)
+            self.assertIsNotNone(blob_bytes)
+            self.assertEqual(mime_type, "image/jpeg")
+            self.assertTrue(len(blob_bytes) > 0, "Compressed bytes should not be empty.")
+if __name__ == "__main__":
+    # Run specific test class or all tests
+    unittest.main(verbosity=2)
 ```
-### File: `codebase_convert\utils\utils.py`
-```python
-import logging
-from typing import Optional
-try:
-    import tiktoken
-    HAS_TIKTOKEN = True
-except ImportError:
-    HAS_TIKTOKEN = False
-logger = logging.getLogger('codebase_convert')
-def estimate_tokens(text: str, verbose: bool = False) -> Optional[int]:
-    '''Estimate token count for LLM usage using tiktoken'''
-    if not HAS_TIKTOKEN:
-        return None
-    try:
-        enc = tiktoken.get_encoding('cl100k_base')
-        return len(enc.encode(text, disallowed_special=()))
-    except Exception as e:
-        if verbose:
-            logger.warning(f'Could not estimate tokens: {e}')
-        return None
-```
-### File: `codebase_convert\utils\__init__.py`
-```python
-from .utils import estimate_tokens
-from .git_utils import clone_github_repo
-from .fs_utils import process_files_with_strategy
-from .image_utils import is_image_file, compress_image
-__all__ = [
-    'estimate_tokens',
-    'clone_github_repo',
-    'process_files_with_strategy',
-    'is_image_file',
-    'compress_image'
-]
-```
-### File: `docs\README.md`
+### File: `docs/README.md`
 ```markdown
 # Codebase Convert
 A powerful Python tool that converts codebases (folder structures with files) into a single text file or Microsoft Word document (.docx), while preserving folder structure and file contents. Perfect for AI/LLM processing, documentation generation, and code analysis.
@@ -2925,7 +3997,7 @@ This project is licensed under the MIT License - see [LICENSE](./LICENSE.md) for
 ==================================================================
 Feel free to customize this template to better suit your project's specifics. Ensure you update placeholders like `"path_or_github_url"`, `"output_path"`, `"txt"`, and `"docx"` with actual values and add any additional sections or information that you think would be useful for your users.
 ```
-### File: `templates\index.html`
+### File: `templates/index.html`
 ```html
 <!DOCTYPE html>
 <html lang="en">
@@ -3376,693 +4448,9 @@ INSTRUCTIONS:
 </body>
 </html>
 ```
-### File: `tests\test_codebase_convert.py`
-```python
-import unittest
-import os
-import sys
-import tempfile
-import shutil
-from pathlib import Path
-# Add parent directory to path for imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from codebase_convert.codebase_convert import CodebaseConvert
-class TestCodebaseConvert(unittest.TestCase):
-    def setUp(self):
-        """Set up test environment with temporary folder structure"""
-        self.test_folder_path = tempfile.mkdtemp(prefix="test_codebase_")
-        # Create test folder structure
-        self._create_test_structure()
-        # Output paths for testing
-        self.output_txt = os.path.join(self.test_folder_path, "output.txt")
-        self.output_docx = os.path.join(self.test_folder_path, "output.docx")
-    def _create_test_structure(self):
-        """Create a complex test folder structure"""
-        base = self.test_folder_path
-        # Create main files
-        with open(os.path.join(base, "main.py"), "w") as f:
-            f.write("print('Hello World')")
-        with open(os.path.join(base, "README.md"), "w") as f:
-            f.write("# Test Project\nThis is a test.")
-        with open(os.path.join(base, "requirements.txt"), "w") as f:
-            f.write("flask>=2.0.0\nflasgger>=0.9.5\npython-docx>=0.8.11\nPillow>=8.0.0\ngitpython>=3.1.0\npathspec>=0.9.0\ntiktoken>=0.3.0")
-        # Create subdirectories
-        os.makedirs(os.path.join(base, "src"), exist_ok=True)
-        os.makedirs(os.path.join(base, "tests"), exist_ok=True)
-        os.makedirs(os.path.join(base, "__pycache__"), exist_ok=True)
-        os.makedirs(os.path.join(base, ".git"), exist_ok=True)
-        os.makedirs(os.path.join(base, "venv", "lib"), exist_ok=True)
-        os.makedirs(os.path.join(base, "logs"), exist_ok=True)
-        # Create files in subdirectories
-        with open(os.path.join(base, "src", "app.py"), "w") as f:
-            f.write("def main():\n    pass")
-        with open(os.path.join(base, "src", "utils.py"), "w") as f:
-            f.write("def helper():\n    return True")
-        with open(os.path.join(base, "tests", "test_app.py"), "w") as f:
-            f.write("import unittest\n\nclass TestApp(unittest.TestCase):\n    pass")
-        # Create files that should be excluded by default
-        with open(os.path.join(base, "__pycache__", "app.cpython-39.pyc"), "w") as f:
-            f.write("binary content")
-        with open(os.path.join(base, ".git", "config"), "w") as f:
-            f.write("[core]\nrepositoryformatversion = 0")
-        with open(os.path.join(base, "venv", "lib", "python3.9"), "w") as f:
-            f.write("virtual env file")
-        with open(os.path.join(base, "logs", "app.log"), "w") as f:
-            f.write("2023-01-01 10:00:00 INFO Application started")
-        with open(os.path.join(base, "temp.tmp"), "w") as f:
-            f.write("temporary content")
-        # Create hidden files
-        with open(os.path.join(base, ".gitignore"), "w") as f:
-            f.write("*.pyc\n__pycache__/\n.env")
-        with open(os.path.join(base, ".env"), "w") as f:
-            f.write("SECRET_KEY=test123")
-    def test_basic_functionality(self):
-        """Test basic text generation without exclusions"""
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        self.assertIn("Folder Structure", text)
-        self.assertIn("File Contents", text)
-        self.assertIn("main.py", text)
-        self.assertIn("Hello World", text)
-    def test_exclude_hidden_files(self):
-        """Test exclusion of hidden files"""
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=True,
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        self.assertNotIn(".gitignore", text)
-        self.assertNotIn(".env", text)
-        self.assertIn("main.py", text)  # Regular files should still be included
-    def test_exclude_patterns(self):
-        """Test pattern-based exclusions"""
-        exclude_patterns = ["*.log", "*.tmp", "__pycache__/**", ".git/**"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=exclude_patterns,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude log and tmp files from folder structure
-        self.assertNotIn("app.log", folder_structure_section)
-        self.assertNotIn("temp.tmp", folder_structure_section)
-        self.assertNotIn("__pycache__/", folder_structure_section)
-        self.assertNotIn(".git/", folder_structure_section)
-        # Should include normal files in folder structure
-        self.assertIn("main.py", folder_structure_section)
-        self.assertIn("src/", folder_structure_section)
-    def test_exclude_specific_files(self):
-        """Test exclusion of specific files"""
-        exclude_patterns = ["README.md", "requirements.txt"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=exclude_patterns,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-          # Should exclude specified files
-        self.assertNotIn("README.md", text)
-        self.assertNotIn("requirements.txt", text)
-        # Should include other files
-        self.assertIn("main.py", text)
-    def test_exclude_directories(self):
-        """Test exclusion of entire directories"""
-        exclude_patterns = ["venv/", "logs/"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=exclude_patterns,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude specified directories from folder structure
-        self.assertNotIn("venv/", folder_structure_section)
-        self.assertNotIn("logs/", folder_structure_section)
-        # Should include other directories
-        self.assertIn("src/", folder_structure_section)
-        self.assertIn("tests/", folder_structure_section)
-    def test_exclude_file_creation(self):
-        """Test loading exclusion patterns from .exclude file"""
-        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
-        # Create .exclude file
-        with open(exclude_file_path, "w") as f:
-            f.write("# This is a comment\n")
-            f.write("*.log\n")
-            f.write("temp.tmp\n")
-            f.write("venv/\n")
-            f.write("\n")  # Empty line
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude files listed in .exclude file from folder structure
-        self.assertNotIn("app.log", folder_structure_section)
-        self.assertNotIn("temp.tmp", folder_structure_section)
-        self.assertNotIn("venv/", folder_structure_section)
-    def test_combined_exclusions(self):
-        """Test combination of CLI args and .exclude file"""
-        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
-        # Create .exclude file
-        with open(exclude_file_path, "w") as f:
-            f.write("*.log\n")
-            f.write("venv/\n")
-        # Also provide CLI exclusions
-        cli_excludes = ["*.tmp", "__pycache__/"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=cli_excludes,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude files from both sources from folder structure
-        self.assertNotIn("app.log", folder_structure_section)  # From .exclude file
-        self.assertNotIn("venv/", folder_structure_section)    # From .exclude file
-        self.assertNotIn("temp.tmp", folder_structure_section) # From CLI
-        self.assertNotIn("__pycache__/", folder_structure_section) # From CLI
-    def test_output_file_generation_txt(self):
-        """Test TXT file output generation"""
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=["*.log", "*.tmp"],
-            ai_optimize=False,
-            strip_comments=False
-        ) as code_to_text:
-            code_to_text.get_file()
-        # Check if output file was created
-        self.assertTrue(os.path.exists(self.output_txt))
-        # Check content
-        with open(self.output_txt, "r", encoding="utf-8") as f:
-            content = f.read()
-            self.assertIn("Folder Structure", content)
-            self.assertIn("main.py", content)
-    def test_output_file_generation_docx(self):
-        """Test DOCX file output generation"""
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_docx,
-            output_type="docx",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=["*.log", "*.tmp"],
-            ai_optimize=False,
-            strip_comments=False
-        ) as code_to_text:
-            code_to_text.get_file()
-        # Check if output file was created
-        self.assertTrue(os.path.exists(self.output_docx))
-    def test_verbose_mode(self):
-        """Test verbose output mode"""
-        with self.assertLogs('codebase_convert', level='DEBUG') as cm:
-            with CodebaseConvert(
-                input_path=self.test_folder_path,
-                output_path=self.output_txt,
-                output_type="txt",
-                verbose=True,
-                exclude_hidden=False,
-                exclude=["*.log"],
-                ai_optimize=False,
-                strip_comments=False
-            ) as code_to_text:
-                code_to_text.get_file()
-            output = "\\n".join(cm.output)
-            # Should contain verbose messages
-            self.assertIn("Active exclusion patterns", output)
-            self.assertIn("Processing:", output)
-    def test_invalid_output_type(self):
-        """Test error handling for invalid output type"""
-        with self.assertRaises(ValueError):
-            with CodebaseConvert(
-                input_path=self.test_folder_path,
-                output_path="output.xyz",
-                output_type="xyz",
-                verbose=False,
-                exclude_hidden=False,
-                exclude=[],
-                ai_optimize=False,
-                strip_comments=False
-            ) as code_to_text:
-                code_to_text.get_file()    
-    def test_exclusion_count_tracking(self):
-        """Test that exclusion counting works correctly"""
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=True,  # Need verbose mode for this test to work properly
-            exclude_hidden=False,
-            exclude=["*.log", "*.tmp", "__pycache__/**"],
-            ai_optimize=False,
-            strip_comments=False
-        ) as code_to_text:
-            # Generate text to trigger exclusion counting
-            code_to_text.get_text()
-            # Should have excluded some files
-            self.assertGreater(code_to_text.excluded_files_count, 0)
-    def test_ai_optimize(self):
-        """Test the new ai_optimize feature strips whitespace"""
-        file_path = os.path.join(self.test_folder_path, "ai_test.py")
-        with open(file_path, "w") as f:
-            f.write("def func():\n    pass\n\n\n\n# test")
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            ai_optimize=True,
-            strip_comments=False
-        ) as code_to_text:
-            text = code_to_text.get_text()
-            self.assertIn("<file path", text) # Check strategy pattern applied ai framing
-    def test_strip_comments(self):
-        """Test the new strip_comments feature removed comments"""
-        file_path = os.path.join(self.test_folder_path, "comment_test.py")
-        with open(file_path, "w") as f:
-            f.write("# this is a comment\ndef func():\n    pass")
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            ai_optimize=True,
-            strip_comments=True
-        ) as code_to_text:
-            text = code_to_text.get_text()
-            self.assertNotIn("this is a comment", text)
-    def tearDown(self):
-        """Clean up test environment"""
-        if os.path.exists(self.test_folder_path):
-            shutil.rmtree(self.test_folder_path)
-class TestPatternMatching(unittest.TestCase):
-    """Test exclusion pattern matching specifically"""
-    def setUp(self):
-        self.test_folder_path = tempfile.mkdtemp(prefix="test_patterns_")
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path="dummy.txt",
-            output_type="txt",
-            exclude=[]
-        ) as self.code_to_text:
-            pass # just used to initialize it
-        # Manually reconstruct the object since `with` block closes it for testing internals:
-        self.code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path="dummy.txt",
-            output_type="txt",
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-    def test_wildcard_patterns(self):
-        """Test wildcard pattern matching"""
-        self.code_to_text.exclude_patterns = {"*.py", "*.log"}
-        # Should match
-        self.assertTrue(self.code_to_text._should_exclude("test.py", self.test_folder_path))
-        self.assertTrue(self.code_to_text._should_exclude("app.log", self.test_folder_path))
-        # Should not match
-        self.assertFalse(self.code_to_text._should_exclude("test.txt", self.test_folder_path))
-        self.assertFalse(self.code_to_text._should_exclude("README.md", self.test_folder_path))
-    def test_directory_patterns(self):
-        """Test directory pattern matching"""
-        self.code_to_text.exclude_patterns = {"__pycache__/", "node_modules/"}
-        # Create test directories
-        pycache_dir = os.path.join(self.test_folder_path, "__pycache__")
-        os.makedirs(pycache_dir, exist_ok=True)
-        # Should match directories
-        self.assertTrue(self.code_to_text._should_exclude(pycache_dir, self.test_folder_path))
-    def test_recursive_patterns(self):
-        """Test recursive wildcard patterns"""
-        self.code_to_text.exclude_patterns = {"**/__pycache__/**", "**/node_modules/**"}
-        # Create nested test structure
-        nested_pycache = os.path.join(self.test_folder_path, "src", "utils", "__pycache__", "file.pyc")
-        os.makedirs(os.path.dirname(nested_pycache), exist_ok=True)
-        # Should match nested paths
-        self.assertTrue(self.code_to_text._should_exclude(nested_pycache, self.test_folder_path))
-    def tearDown(self):
-        """Clean up test environment"""
-        if os.path.exists(self.test_folder_path):
-            shutil.rmtree(self.test_folder_path)
-class TestDocxImage(unittest.TestCase):
-    def test_docx_with_image(self):
-        import tempfile
-        import os
-        import base64
-        from docx import Document
-        # Create a temporary directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Write a dummy 1x1 PNG image
-            img_path = os.path.join(temp_dir, "dummy.png")
-            png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAC0lEQVQIW2NgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII="
-            with open(img_path, "wb") as f:
-                f.write(base64.b64decode(png_data))
-            # Create a new DOCX document and add a picture
-            doc = Document()
-            doc.add_paragraph("Testing DOCX image inclusion.")
-            doc.add_picture(img_path)
-            # Save the document
-            doc_path = os.path.join(temp_dir, "test.docx")
-            doc.save(doc_path)
-            # Reload the document and assert that it contains an inline image
-            new_doc = Document(doc_path)
-            self.assertGreater(len(new_doc.inline_shapes), 0, "Document should contain at least one inline image.")
-class TestImageCompression(unittest.TestCase):
-    def test_image_compression(self):
-        """Test images that compress into .txt format correctly"""
-        import tempfile
-        import os
-        import base64
-        from PIL import Image
-        import io
-        # Create a temporary directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a simple 100x100 red PNG image
-            img = Image.new('RGB', (100, 100), color='red')
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format='PNG')
-            img_data = img_bytes.getvalue()
-            # Write the image to a file
-            img_path = os.path.join(temp_dir, "test_image.png")
-            with open(img_path, "wb") as f:
-                f.write(img_data)
-            # Create a CodebaseConvert instance
-            code_to_text = CodebaseConvert(
-                input_path=temp_dir,
-                output_path="dummy.txt",
-                output_type="txt",
-                verbose=False,
-                exclude_hidden=False,
-                exclude=[],
-                ai_optimize=False,
-                strip_comments=False
-            )
-            # Test compression to TXT format
-            from codebase_convert.utils.image_utils import compress_image
-            blob_bytes, mime_type = compress_image(img_path)
-            self.assertIsNotNone(blob_bytes)
-            self.assertEqual(mime_type, "image/jpeg")
-            self.assertTrue(len(blob_bytes) > 0, "Compressed bytes should not be empty.")
-if __name__ == "__main__":
-    # Run specific test class or all tests
-    unittest.main(verbosity=2)
-```
-### File: `tests\__init__.py`
-```python
-```
 ```
 
-### File: `docs\README.md`
-
-```markdown
-# Codebase Convert
-A powerful Python tool that converts codebases (folder structures with files) into a single text file or Microsoft Word document (.docx), while preserving folder structure and file contents. Perfect for AI/LLM processing, documentation generation, and code analysis.
-# Wanna see an example? This repo was converted to Markdown [here](./codebase-convert-2.0.0.md).
-## ✨ Features
-- **Multi-source input**: Local directories and GitHub repositories
-- **Flexible output**: Text files (.txt), Markdown (.md), and Microsoft Word documents (.docx)
-- **AI Optimized Output**: Formatting and compression designed explicitly for LLM contexts (enabled by default)
-- **Token Estimation**: Automatically calculates rough token counts string size using `tiktoken` to ensure your prompt fits into context windows.
-- **Image Support**: Automatically embeds codebase images into Word documents or Base64 encodes them for text output
-- **Smart exclusions**: Automatically respects local `.gitignore` files, along with advanced pattern matching for files and directories
-- **Performance optimized**: Single-threaded generator traversal for local paths avoids thread overhead; multithreading is reserved for remote GitHub I/O
-- **Comprehensive logging**: Detailed verbose mode for log transparency
-- **Encoding support**: Handles various file encodings gracefully
-## 🚀 Installation
-### Option 1: Install from GitHub Release (Recommended)
-You can download the pre-built package directly from the [GitHub Releases](https://github.com/Misterscan/codebase_convert/releases) page:
-1. Download the `codebase_convert-2.0.0.tar.gz` or `.whl` file from the latest release.
-2. Install it using pip:
-   ```bash
-   pip install codebase_convert-2.0.0.tar.gz
-   ```
-### Option 2: Install from Source
-```bash
-# Clone the repository
-git clone https://github.com/Misterscan/codebase_convert.git
-cd codebase_convert
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-# Install the package
-pip install -e .
-```
-## 📖 Usage
-### Web Interface & API
-You can run the web application locally to access a graphical user interface (GUI) and interactive Swagger API documentation. 
-```bash
-# Start the web interface
-python app.py
-```
-* **Graphical Web UI**: Open [http://127.0.0.1:5003](http://127.0.0.1:5003) to use the beautifully styled Catppuccin web interface. Just paste your codebase path/URL, set your options, and download your converted file! Once your download completes, you'll see a new **Ask AI for a Code Review** section with pre-configured, comprehensive review prompts tailored for models like ChatGPT, Claude, Gemini, DeepSeek, Mistral, Perplexity, Grok, Meta AI, HuggingChat, and Poe.
-* **Swagger API Docs**: Open [http://127.0.0.1:5003/apidocs/](http://127.0.0.1:5003/apidocs/) to view the interactive API playground.
-### Command Line Interface (CLI)
-#### Basic Usage
-```bash
-cb --input "path_or_github_url" --output "output_path" --output_type "txt"
-```
-#### Advanced Usage with Exclusions and Settings
-```bash
-# Exclude specific patterns
-cb --input "./my_project" --output "output.md" --output_type "md" --exclude "*.log,temp/,**/__pycache__/**"
-# Disable AI Optimization (keeps empty lines, raw formats)
-cb --input "./my_project" --output "output.docx" --output_type "docx" --no_ai_optimize
-# Strip Comments
-cb --input "./my_project" --output "output.txt" --output_type "txt" --strip_comments
-# Verbose logging output
-cb --input "./my_project" --output "output.txt" --output_type "txt" --verbose
-```
-### Python API
-```python
-from codebase_convert import CodebaseConvert
-# Basic usage — use as a context manager to ensure safe resource cleanup
-with CodebaseConvert(
-    input_path="path_or_github_url",
-    output_path="output_path",
-    output_type="md"
-) as converter:
-    converter.get_file()
-# Advanced usage with exclusions and AI optimization
-with CodebaseConvert(
-    input_path="./my_project",
-    output_path="./output.md",
-    output_type="md",
-    exclude=["*.log", "temp/", "**/__pycache__/**"],
-    exclude_hidden=True,
-    ai_optimize=True,  # Defaults to True. Set to False to retain raw whitespace formats
-    strip_comments=False, # Defaults to False. Set to True to remove all prefixed comments
-    verbose=True
-) as converter:
-    converter.get_file()
-    # Get text content without saving to file
-    text_content = converter.get_text()
-    print(text_content)
-# Token estimation (uses cl100k_base encoding via tiktoken)
-from codebase_convert.utils import estimate_tokens
-token_count = estimate_tokens(text_content)
-print(f"Estimated tokens: {token_count:,}")
-```
-## 🎯 Exclusion Patterns
-The tool supports powerful exclusion patterns to filter out unwanted files and directories:
-### Pattern Types
-1. **Exact filename**: `README.md`, `config.yaml`
-2. **Wildcard patterns**: `*.log`, `*.tmp`, `test_*`
-3. **Directory patterns**: `__pycache__/`, `.git/`, `node_modules/`
-4. **Recursive patterns**: `**/__pycache__/**`, `**/node_modules/**`
-5. **Path-based patterns**: `src/temp/`, `docs/build/`
-### Exclusion Sources
-1. **`.gitignore`**: The tool automatically attempts to read `.gitignore` at the root path and applies its rules.
-2. **CLI Arguments**: Use `--exclude` flag (can be used multiple times)
-3. **`.exclude` file**: Place in your project root (see example below)
-4. **Default patterns**: Common files/folders are excluded automatically
-### Default Exclusions
-The tool automatically excludes common development files:
-- `.git/`, `__pycache__/`, `*.pyc`, `*.pyo`
-- `node_modules/`, `.venv/`, `venv/`, `env/`
-- `*.log`, `*.tmp`, `.DS_Store`
-- `.pytest_cache/`, `build/`, `dist/`
-When `ai_optimize` is enabled (default), various media and binary files (`*.mp3`, `*.pdf`, `*.ttf`, etc.) are also automatically excluded to keep outputs clean.
-## 📝 .exclude File Example
-Create a `.exclude` file in your project root:
-```bash
-# .exclude file - Patterns for files/folders to exclude
-# Version control
-.git/
-.gitignore
-# Python
-__pycache__/
-*.pyc
-venv/
-.pytest_cache/
-# Node.js
-node_modules/
-*.log
-# IDE files
-.vscode/
-.idea/
-# Project specific
-config/secrets.yaml
-data/large_files/
-```
-## 🔧 CLI Parameters
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `--input` | Input path (local folder or GitHub URL) | `./my_project` or `https://github.com/user/repo` |
-| `--output` | Output file path | `./output.txt` |
-| `--output_type` | Output format (`txt` or `docx`) | `txt` |
-| `--exclude` | Exclusion patterns (repeatable) | `--exclude "*.log" --exclude "temp/"` |
-| `--exclude_hidden` | Exclude hidden files/folders | Flag (no value) |
-| `--no_ai_optimize` | Disable AI-optimized output | Flag (no value) |
-| `--strip_comments` | Strip comments from code | Flag (no value) |
-| `--verbose` | Enable detailed logging | Flag (no value) |
-## 💡 Examples
-### Convert Local Project
-```bash
-# Basic conversion
-cb --input "~/projects/my_app" --output "my_app_code.md" --output_type "md"
-# With custom exclusions
-cb --input "~/projects/my_app" --output "my_app_code.txt" --output_type "txt" --exclude "*.log,build/,dist/" --verbose
-```
-### Convert GitHub Repository
-```bash
-# Public repository
-cb --input "https://github.com/username/repo" --output "repo_analysis.docx" --output_type "docx"
-# With exclusions for cleaner output
-cb --input "https://github.com/username/repo" --output "repo_clean.txt" --output_type "txt" --exclude "*.md,docs/,examples/"
-```
-### Python Integration
-```python
-# Analyze a codebase programmatically
-from codebase_convert import CodebaseConvert
-def analyze_codebase(project_path):
-    with CodebaseConvert(
-        input_path=project_path,
-        output_path="analysis.txt",
-        output_type="txt",
-        exclude=["*.log", "test/", "**/__pycache__/**"],
-        ai_optimize=True,
-        strip_comments=False,
-        verbose=True
-    ) as converter:
-        # Get the content
-        content = converter.get_text()
-    # Process with your preferred LLM/AI tool
-    # analysis_result = your_ai_tool.analyze(content)
-    return content
-# Usage
-code_content = analyze_codebase("./my_project")
-```
-## 🎯 Use Cases
-- **AI/LLM Training**: Prepare codebases for language model training
-- **Code Review**: Generate comprehensive code overviews for review
-- **Documentation**: Create single-file documentation from projects
-- **Analysis**: Feed entire codebases to AI tools for analysis
-- **Migration**: Document legacy codebases before migration
-- **Learning**: Study open-source projects more effectively
-## 🏗️ Architecture
-The package is structured into focused, single-responsibility services:
-```
-codebase_to_text/
-├── app.py                          # Flask web server — REST API + form routes
-├── setup.py                        # Package build configuration
-├── requirements.txt                # Runtime dependencies
-├── templates/
-│   └── index.html                  # Catppuccin web UI
-├── tests/
-│   └── test_codebase_convert.py    # Full unit test suite
-├── docs/
-│   └── README.md                   # This file
-└── codebase_convert/
-    ├── __init__.py                 # Package entry point
-    ├── codebase_convert.py         # Core orchestration and formatter strategy classes
-    └── utils/
-        ├── __init__.py             # Public re-exports for all utilities
-        ├── utils.py                # Token estimation (cl100k_base via tiktoken)
-        ├── git_utils.py            # GitHub clone service with atexit cleanup registry
-        ├── fs_utils.py             # Filesystem walker (generator for local, threaded for remote)
-        └── image_utils.py          # Image compression and type detection
-```
-### Key Design Decisions
-**Strategy Pattern for Output Formats**
-`TxtFormatter`, `MdFormatter`, and `DocxFormatter` all implement the `OutputFormatter` abstract base class. Each formatter owns its own `format_file_success()`, `format_file_error()`, `combine_text()`, and `save_file()` methods — including all `python-docx` object manipulation inside `DocxFormatter`. `get_file()` in `CodebaseConvert` simply delegates to `self.formatter.save_file(...)` with no output-type branching logic.
-**Filesystem Walker Strategy**
-`fs_utils.py` exposes a `walk_filesystem_generator()` that yields `(file, root, base_path)` tuples lazily. `process_files_with_strategy()` decides whether to consume that generator synchronously (local paths) or via a `ThreadPoolExecutor` (GitHub clones), keeping threading overhead off small local repositories.
-**GitHub Clone Lifecycle**
-`git_utils.py` maintains a module-level `_temp_dirs` registry. Every directory created by `clone_github_repo()` is appended to this list, and `atexit.register(cleanup_temp_dirs)` ensures all of them are deleted on process exit — including on `SIGTERM` — without relying on `__exit__` being called.
-**Security: Path Traversal Prevention**
-`_safe_input_path()` in `app.py` calls `pathlib.Path.resolve()` on both the input path and the workspace root before the `startswith` comparison, neutralising symlink-based directory escape attempts that `os.path.abspath` does not catch.
-**Token Estimation**
-All token counting is centralised in `codebase_convert/utils/utils.py` using `tiktoken`'s `cl100k_base` encoding. Neither `CodebaseConvert` nor `app.py` contain their own counting logic; both import from `codebase_convert.utils`.
-## 🔄 Output Format
-The generated output includes:
-1. **Folder Structure**: Tree-like representation of the directory structure
-2. **File Contents**: Full content of each file with metadata
-3. **Clear Separators**: Distinct sections for easy navigation
-## 🤝🏾 Contributing
-Contributions are welcome! Please follow these steps:
-- Fork the repository.
-- Create a new branch (git checkout -b feature_branch).
-- Make your changes.
-- Commit your changes (git commit -am 'Add new feature').
-- Push to the branch (git push origin feature_branch).
-- Create a new Pull Request.
-## ✒️ License
-This project is licensed under the MIT License - see [LICENSE](./LICENSE.md) for details.
-==================================================================
-Feel free to customize this template to better suit your project's specifics. Ensure you update placeholders like `"path_or_github_url"`, `"output_path"`, `"txt"`, and `"docx"` with actual values and add any additional sections or information that you think would be useful for your users.
-```
-
-### File: `templates\index.html`
+### File: `templates/index.html`
 
 ```html
 <!DOCTYPE html>
@@ -4513,447 +4901,4 @@ INSTRUCTIONS:
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
-```
-
-### File: `tests\test_codebase_convert.py`
-
-```python
-import unittest
-import os
-import sys
-import tempfile
-import shutil
-from pathlib import Path
-# Add parent directory to path for imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from codebase_convert.codebase_convert import CodebaseConvert
-class TestCodebaseConvert(unittest.TestCase):
-    def setUp(self):
-        """Set up test environment with temporary folder structure"""
-        self.test_folder_path = tempfile.mkdtemp(prefix="test_codebase_")
-        # Create test folder structure
-        self._create_test_structure()
-        # Output paths for testing
-        self.output_txt = os.path.join(self.test_folder_path, "output.txt")
-        self.output_docx = os.path.join(self.test_folder_path, "output.docx")
-    def _create_test_structure(self):
-        """Create a complex test folder structure"""
-        base = self.test_folder_path
-        # Create main files
-        with open(os.path.join(base, "main.py"), "w") as f:
-            f.write("print('Hello World')")
-        with open(os.path.join(base, "README.md"), "w") as f:
-            f.write("# Test Project\nThis is a test.")
-        with open(os.path.join(base, "requirements.txt"), "w") as f:
-            f.write("flask>=2.0.0\nflasgger>=0.9.5\npython-docx>=0.8.11\nPillow>=8.0.0\ngitpython>=3.1.0\npathspec>=0.9.0\ntiktoken>=0.3.0")
-        # Create subdirectories
-        os.makedirs(os.path.join(base, "src"), exist_ok=True)
-        os.makedirs(os.path.join(base, "tests"), exist_ok=True)
-        os.makedirs(os.path.join(base, "__pycache__"), exist_ok=True)
-        os.makedirs(os.path.join(base, ".git"), exist_ok=True)
-        os.makedirs(os.path.join(base, "venv", "lib"), exist_ok=True)
-        os.makedirs(os.path.join(base, "logs"), exist_ok=True)
-        # Create files in subdirectories
-        with open(os.path.join(base, "src", "app.py"), "w") as f:
-            f.write("def main():\n    pass")
-        with open(os.path.join(base, "src", "utils.py"), "w") as f:
-            f.write("def helper():\n    return True")
-        with open(os.path.join(base, "tests", "test_app.py"), "w") as f:
-            f.write("import unittest\n\nclass TestApp(unittest.TestCase):\n    pass")
-        # Create files that should be excluded by default
-        with open(os.path.join(base, "__pycache__", "app.cpython-39.pyc"), "w") as f:
-            f.write("binary content")
-        with open(os.path.join(base, ".git", "config"), "w") as f:
-            f.write("[core]\nrepositoryformatversion = 0")
-        with open(os.path.join(base, "venv", "lib", "python3.9"), "w") as f:
-            f.write("virtual env file")
-        with open(os.path.join(base, "logs", "app.log"), "w") as f:
-            f.write("2023-01-01 10:00:00 INFO Application started")
-        with open(os.path.join(base, "temp.tmp"), "w") as f:
-            f.write("temporary content")
-        # Create hidden files
-        with open(os.path.join(base, ".gitignore"), "w") as f:
-            f.write("*.pyc\n__pycache__/\n.env")
-        with open(os.path.join(base, ".env"), "w") as f:
-            f.write("SECRET_KEY=test123")
-    def test_basic_functionality(self):
-        """Test basic text generation without exclusions"""
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        self.assertIn("Folder Structure", text)
-        self.assertIn("File Contents", text)
-        self.assertIn("main.py", text)
-        self.assertIn("Hello World", text)
-    def test_exclude_hidden_files(self):
-        """Test exclusion of hidden files"""
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=True,
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        self.assertNotIn(".gitignore", text)
-        self.assertNotIn(".env", text)
-        self.assertIn("main.py", text)  # Regular files should still be included
-    def test_exclude_patterns(self):
-        """Test pattern-based exclusions"""
-        exclude_patterns = ["*.log", "*.tmp", "__pycache__/**", ".git/**"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=exclude_patterns,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude log and tmp files from folder structure
-        self.assertNotIn("app.log", folder_structure_section)
-        self.assertNotIn("temp.tmp", folder_structure_section)
-        self.assertNotIn("__pycache__/", folder_structure_section)
-        self.assertNotIn(".git/", folder_structure_section)
-        # Should include normal files in folder structure
-        self.assertIn("main.py", folder_structure_section)
-        self.assertIn("src/", folder_structure_section)
-    def test_exclude_specific_files(self):
-        """Test exclusion of specific files"""
-        exclude_patterns = ["README.md", "requirements.txt"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=exclude_patterns,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-          # Should exclude specified files
-        self.assertNotIn("README.md", text)
-        self.assertNotIn("requirements.txt", text)
-        # Should include other files
-        self.assertIn("main.py", text)
-    def test_exclude_directories(self):
-        """Test exclusion of entire directories"""
-        exclude_patterns = ["venv/", "logs/"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=exclude_patterns,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude specified directories from folder structure
-        self.assertNotIn("venv/", folder_structure_section)
-        self.assertNotIn("logs/", folder_structure_section)
-        # Should include other directories
-        self.assertIn("src/", folder_structure_section)
-        self.assertIn("tests/", folder_structure_section)
-    def test_exclude_file_creation(self):
-        """Test loading exclusion patterns from .exclude file"""
-        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
-        # Create .exclude file
-        with open(exclude_file_path, "w") as f:
-            f.write("# This is a comment\n")
-            f.write("*.log\n")
-            f.write("temp.tmp\n")
-            f.write("venv/\n")
-            f.write("\n")  # Empty line
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude files listed in .exclude file from folder structure
-        self.assertNotIn("app.log", folder_structure_section)
-        self.assertNotIn("temp.tmp", folder_structure_section)
-        self.assertNotIn("venv/", folder_structure_section)
-    def test_combined_exclusions(self):
-        """Test combination of CLI args and .exclude file"""
-        exclude_file_path = os.path.join(self.test_folder_path, ".exclude")
-        # Create .exclude file
-        with open(exclude_file_path, "w") as f:
-            f.write("*.log\n")
-            f.write("venv/\n")
-        # Also provide CLI exclusions
-        cli_excludes = ["*.tmp", "__pycache__/"]
-        code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=cli_excludes,
-            ai_optimize=False,
-            strip_comments=False
-        )
-        text = code_to_text.get_text()
-        # Split the text to get only the folder structure section
-        folder_structure_section = text.split("File Contents")[0]
-        # Should exclude files from both sources from folder structure
-        self.assertNotIn("app.log", folder_structure_section)  # From .exclude file
-        self.assertNotIn("venv/", folder_structure_section)    # From .exclude file
-        self.assertNotIn("temp.tmp", folder_structure_section) # From CLI
-        self.assertNotIn("__pycache__/", folder_structure_section) # From CLI
-    def test_output_file_generation_txt(self):
-        """Test TXT file output generation"""
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=["*.log", "*.tmp"],
-            ai_optimize=False,
-            strip_comments=False
-        ) as code_to_text:
-            code_to_text.get_file()
-        # Check if output file was created
-        self.assertTrue(os.path.exists(self.output_txt))
-        # Check content
-        with open(self.output_txt, "r", encoding="utf-8") as f:
-            content = f.read()
-            self.assertIn("Folder Structure", content)
-            self.assertIn("main.py", content)
-    def test_output_file_generation_docx(self):
-        """Test DOCX file output generation"""
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_docx,
-            output_type="docx",
-            verbose=False,
-            exclude_hidden=False,
-            exclude=["*.log", "*.tmp"],
-            ai_optimize=False,
-            strip_comments=False
-        ) as code_to_text:
-            code_to_text.get_file()
-        # Check if output file was created
-        self.assertTrue(os.path.exists(self.output_docx))
-    def test_verbose_mode(self):
-        """Test verbose output mode"""
-        with self.assertLogs('codebase_convert', level='DEBUG') as cm:
-            with CodebaseConvert(
-                input_path=self.test_folder_path,
-                output_path=self.output_txt,
-                output_type="txt",
-                verbose=True,
-                exclude_hidden=False,
-                exclude=["*.log"],
-                ai_optimize=False,
-                strip_comments=False
-            ) as code_to_text:
-                code_to_text.get_file()
-            output = "\\n".join(cm.output)
-            # Should contain verbose messages
-            self.assertIn("Active exclusion patterns", output)
-            self.assertIn("Processing:", output)
-    def test_invalid_output_type(self):
-        """Test error handling for invalid output type"""
-        with self.assertRaises(ValueError):
-            with CodebaseConvert(
-                input_path=self.test_folder_path,
-                output_path="output.xyz",
-                output_type="xyz",
-                verbose=False,
-                exclude_hidden=False,
-                exclude=[],
-                ai_optimize=False,
-                strip_comments=False
-            ) as code_to_text:
-                code_to_text.get_file()    
-    def test_exclusion_count_tracking(self):
-        """Test that exclusion counting works correctly"""
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=True,  # Need verbose mode for this test to work properly
-            exclude_hidden=False,
-            exclude=["*.log", "*.tmp", "__pycache__/**"],
-            ai_optimize=False,
-            strip_comments=False
-        ) as code_to_text:
-            # Generate text to trigger exclusion counting
-            code_to_text.get_text()
-            # Should have excluded some files
-            self.assertGreater(code_to_text.excluded_files_count, 0)
-    def test_ai_optimize(self):
-        """Test the new ai_optimize feature strips whitespace"""
-        file_path = os.path.join(self.test_folder_path, "ai_test.py")
-        with open(file_path, "w") as f:
-            f.write("def func():\n    pass\n\n\n\n# test")
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            ai_optimize=True,
-            strip_comments=False
-        ) as code_to_text:
-            text = code_to_text.get_text()
-            self.assertIn("<file path", text) # Check strategy pattern applied ai framing
-    def test_strip_comments(self):
-        """Test the new strip_comments feature removed comments"""
-        file_path = os.path.join(self.test_folder_path, "comment_test.py")
-        with open(file_path, "w") as f:
-            f.write("# this is a comment\ndef func():\n    pass")
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path=self.output_txt,
-            output_type="txt",
-            verbose=False,
-            ai_optimize=True,
-            strip_comments=True
-        ) as code_to_text:
-            text = code_to_text.get_text()
-            self.assertNotIn("this is a comment", text)
-    def tearDown(self):
-        """Clean up test environment"""
-        if os.path.exists(self.test_folder_path):
-            shutil.rmtree(self.test_folder_path)
-class TestPatternMatching(unittest.TestCase):
-    """Test exclusion pattern matching specifically"""
-    def setUp(self):
-        self.test_folder_path = tempfile.mkdtemp(prefix="test_patterns_")
-        with CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path="dummy.txt",
-            output_type="txt",
-            exclude=[]
-        ) as self.code_to_text:
-            pass # just used to initialize it
-        # Manually reconstruct the object since `with` block closes it for testing internals:
-        self.code_to_text = CodebaseConvert(
-            input_path=self.test_folder_path,
-            output_path="dummy.txt",
-            output_type="txt",
-            exclude=[],
-            ai_optimize=False,
-            strip_comments=False
-        )
-    def test_wildcard_patterns(self):
-        """Test wildcard pattern matching"""
-        self.code_to_text.exclude_patterns = {"*.py", "*.log"}
-        # Should match
-        self.assertTrue(self.code_to_text._should_exclude("test.py", self.test_folder_path))
-        self.assertTrue(self.code_to_text._should_exclude("app.log", self.test_folder_path))
-        # Should not match
-        self.assertFalse(self.code_to_text._should_exclude("test.txt", self.test_folder_path))
-        self.assertFalse(self.code_to_text._should_exclude("README.md", self.test_folder_path))
-    def test_directory_patterns(self):
-        """Test directory pattern matching"""
-        self.code_to_text.exclude_patterns = {"__pycache__/", "node_modules/"}
-        # Create test directories
-        pycache_dir = os.path.join(self.test_folder_path, "__pycache__")
-        os.makedirs(pycache_dir, exist_ok=True)
-        # Should match directories
-        self.assertTrue(self.code_to_text._should_exclude(pycache_dir, self.test_folder_path))
-    def test_recursive_patterns(self):
-        """Test recursive wildcard patterns"""
-        self.code_to_text.exclude_patterns = {"**/__pycache__/**", "**/node_modules/**"}
-        # Create nested test structure
-        nested_pycache = os.path.join(self.test_folder_path, "src", "utils", "__pycache__", "file.pyc")
-        os.makedirs(os.path.dirname(nested_pycache), exist_ok=True)
-        # Should match nested paths
-        self.assertTrue(self.code_to_text._should_exclude(nested_pycache, self.test_folder_path))
-    def tearDown(self):
-        """Clean up test environment"""
-        if os.path.exists(self.test_folder_path):
-            shutil.rmtree(self.test_folder_path)
-class TestDocxImage(unittest.TestCase):
-    def test_docx_with_image(self):
-        import tempfile
-        import os
-        import base64
-        from docx import Document
-        # Create a temporary directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Write a dummy 1x1 PNG image
-            img_path = os.path.join(temp_dir, "dummy.png")
-            png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAAC0lEQVQIW2NgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII="
-            with open(img_path, "wb") as f:
-                f.write(base64.b64decode(png_data))
-            # Create a new DOCX document and add a picture
-            doc = Document()
-            doc.add_paragraph("Testing DOCX image inclusion.")
-            doc.add_picture(img_path)
-            # Save the document
-            doc_path = os.path.join(temp_dir, "test.docx")
-            doc.save(doc_path)
-            # Reload the document and assert that it contains an inline image
-            new_doc = Document(doc_path)
-            self.assertGreater(len(new_doc.inline_shapes), 0, "Document should contain at least one inline image.")
-class TestImageCompression(unittest.TestCase):
-    def test_image_compression(self):
-        """Test images that compress into .txt format correctly"""
-        import tempfile
-        import os
-        import base64
-        from PIL import Image
-        import io
-        # Create a temporary directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a simple 100x100 red PNG image
-            img = Image.new('RGB', (100, 100), color='red')
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format='PNG')
-            img_data = img_bytes.getvalue()
-            # Write the image to a file
-            img_path = os.path.join(temp_dir, "test_image.png")
-            with open(img_path, "wb") as f:
-                f.write(img_data)
-            # Create a CodebaseConvert instance
-            code_to_text = CodebaseConvert(
-                input_path=temp_dir,
-                output_path="dummy.txt",
-                output_type="txt",
-                verbose=False,
-                exclude_hidden=False,
-                exclude=[],
-                ai_optimize=False,
-                strip_comments=False
-            )
-            # Test compression to TXT format
-            from codebase_convert.utils.image_utils import compress_image
-            blob_bytes, mime_type = compress_image(img_path)
-            self.assertIsNotNone(blob_bytes)
-            self.assertEqual(mime_type, "image/jpeg")
-            self.assertTrue(len(blob_bytes) > 0, "Compressed bytes should not be empty.")
-if __name__ == "__main__":
-    # Run specific test class or all tests
-    unittest.main(verbosity=2)
 ```

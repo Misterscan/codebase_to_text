@@ -235,12 +235,11 @@ class CodebaseConvert:
         if self.verbose and self.exclude_patterns:
             logger.debug(f"Active exclusion patterns: {sorted(self.exclude_patterns)}")
 
-    def _load_gitignore(self):
+    def _load_gitignore(self, base_path: Optional[str] = None):
         """Load patterns from local .gitignore file if present."""
-        gitignore_path = os.path.join(
-            self.input_path if not self.is_github_repo() else '.',
-            '.gitignore'
-        )
+        search_path = base_path if base_path else (self.input_path if not self.is_github_repo() else '.')
+        gitignore_path = os.path.join(search_path, '.gitignore')
+        
         if not os.path.exists(gitignore_path):
             return
 
@@ -298,12 +297,11 @@ class CodebaseConvert:
             default_excludes.update(media_excludes)
             
         self.exclude_patterns.update(default_excludes)
-    def _add_file_patterns(self):
+    def _add_file_patterns(self, base_path: Optional[str] = None):
         """Load patterns from a .exclude file if present."""
-        exclude_file_path = os.path.join(
-            self.input_path if not self.is_github_repo() else '.',
-            '.exclude'
-        )
+        search_path = base_path if base_path else (self.input_path if not self.is_github_repo() else '.')
+        exclude_file_path = os.path.join(search_path, '.exclude')
+        
         if not os.path.exists(exclude_file_path):
             return
         try:

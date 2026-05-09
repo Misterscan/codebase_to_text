@@ -143,20 +143,6 @@ def _safe_input_path(input_path: str) -> bool:
     except Exception:
         return False
 
-def write_to(self, output_path: str) -> None:
-    repo_path = self._resolve_working_path()
-    with open(output_path, "w", encoding="utf-8") as out:
-        out.write(self._parse_folder(repo_path))
-        out.write("\n--- FILE CONTENTS ---\n\n")
-        for file, root, base in walk_filesystem_generator(
-            repo_path,
-            self._should_exclude,
-            self._handle_directory_exclusion,
-            self._filter_directories_for_processing
-        ):
-            chunk = self._process_single_file(file, root, base)
-            if chunk:
-                out.write(chunk)
 
 def _process_conversion(input_path, output_type, exclude, exclude_hidden, ai_optimize, strip_comments, verbose, is_json, download_filename=None):
     if not _safe_input_path(input_path):
